@@ -67,10 +67,14 @@ pub enum Order {
 
 /// FIFO queue of [`Order`]s on a ship. `Mine` persists until external
 /// conditions (cargo full or asteroid despawned) pop it.
+///
+/// FIFO is compiler-enforced: the inner [`VecDeque`] is private; only
+/// [`OrderQueue::push_back`] / [`OrderQueue::pop_front`] / [`OrderQueue::advance_if`]
+/// can mutate ordering. Reads go through [`OrderQueue::front`] / [`OrderQueue::get`]
+/// / [`OrderQueue::iter`].
 #[derive(Debug, Clone, PartialEq, Component, Default)]
 pub struct OrderQueue {
-    /// Ordered queue, front is current order.
-    pub orders: VecDeque<Order>,
+    orders: VecDeque<Order>,
 }
 
 impl OrderQueue {
@@ -129,10 +133,21 @@ impl OrderQueue {
         matches!(self.front(), Some(Order::Mine(_)))
     }
 
+    /// Read-only access to the order at `index` (FIFO order).
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&Order> {
+        self.orders.get(index)
+    }
+
+    /// Iterate over queued orders in FIFO order.
+    pub fn iter(&self) -> impl Iterator<Item = &Order> {
+        self.orders.iter()
+    }
+
     /// Convenience: pop front if `predicate` returns true for the front order.
     /// `Mine` callers should gate on cargo/asteroid state before calling.
-    pub fn advance_if(&mut self, predicate: impl Fn(&Order) -> bool) -> Option<Order> {
-        if self.front().is_some_and(&predicate) {
+    pub fn advance_if(&mut self, predicate: impl FnOnce(&Order) -> bool) -> Option<Order> {
+        if self.front().is_some_and(predicate) {
             self.pop_front()
         } else {
             None
@@ -153,8 +168,12 @@ pub struct SimPlugin;
 impl Plugin for SimPlugin {
     fn build(&self, app: &mut App) {
         // `MinimalPlugins` does not include `StatesPlugin`; `init_state` requires the
-        // `StateTransition` schedule. Add it if missing (idempotent guard).
-        if !app.is_plugin_added::<bevy::state::app::StatesPlugin>() {
+        // `StateTransition` schedule. Install `StatesPlugin` idempotently — check the
+        // schedule itself so transitive `DefaultPlugins` inclusion doesn't double-add.
+        if app
+            .get_schedule(bevy::state::prelude::StateTransition)
+            .is_none()
+        {
             app.add_plugins(bevy::state::app::StatesPlugin);
         }
         app.init_state::<GameState>();
@@ -196,12 +215,13 @@ mod tests {
         ));
         q.push_back(Order::Mine(entities[2]));
 
-        // Assert — FIFO order preserved
+        // Assert — FIFO order preserved (via read-only accessors; FIFO mutation is private)
         assert_eq!(q.len(), 4);
         assert_eq!(q.front(), Some(&Order::FlyTo(Vec3::new(1.0, 0.0, 0.0))));
-        assert!(matches!(q.orders[1], Order::Approach(_)));
-        assert!(matches!(q.orders[2], Order::Orbit(_, _)));
-        assert!(matches!(q.orders[3], Order::Mine(_)));
+        assert!(matches!(q.get(1), Some(Order::Approach(_))));
+        assert!(matches!(q.get(2), Some(Order::Orbit(_, _))));
+        assert!(matches!(q.get(3), Some(Order::Mine(_))));
+        assert_eq!(q.iter().count(), 4);
         assert!(!q.is_mining(), "front is FlyTo, not Mine");
     }
 
@@ -316,11 +336,14 @@ mod tests {
             "should have ticked 3 times in Simulating, got {count_sim}"
         );
 
-        // Transition to Paused -> no further ticks
+        // Transition to Paused -> no further ticks. This `app.update()` applies the
+        // `StateTransition` schedule and may still tick once in `Simulating` before
+        // the state flips; `prev` is captured *after* that transitional tick so
+        // the following assertion measures ticks only while `Paused`.
         app.world_mut()
             .resource_mut::<NextState<GameState>>()
             .set(GameState::Paused);
-        app.update(); // apply StateTransition
+        app.update(); // apply StateTransition (may tick once more in Simulating)
         let prev = app.world().resource::<TickCount>().0;
         for _ in 0..3 {
             app.update();
@@ -353,21 +376,92 @@ mod tests {
     }
 
     #[test]
-    fn sets_chain_ordered_fixedupdate_deterministic_smoke() {
-        // Smoke: multiple FixedUpdate passes don't lose queue ordering (determinism proxy).
+    fn order_queue_fifo_survives_fixed_update_ticks() {
+        // Proves FIFO survives *scheduled* `FixedUpdate` ticks, not manual `pop_front()`.
+        // A pop system runs in `AiSet` (gated by `Simulating`) and deterministically
+        // pops one order per `FixedUpdate` frame via `ManualDuration`.
+        use bevy::time::{Fixed, Time, TimeUpdateStrategy};
+
+        fn pop_front_system(mut query: Query<&mut OrderQueue>) {
+            for mut q in &mut query {
+                q.pop_front();
+            }
+        }
+
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, SimPlugin));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(
+            Time::<Fixed>::default().timestep(),
+        ));
+        app.add_systems(FixedUpdate, pop_front_system.in_set(AiSet));
 
-        let mut q = OrderQueue::new();
+        let mut queue = OrderQueue::new();
         for i in 0..10 {
-            q.push_back(Order::FlyTo(Vec3::new(i as f32, 0.0, 0.0)));
+            queue.push_back(Order::FlyTo(Vec3::new(i as f32, 0.0, 0.0)));
         }
-        // Tick 5 FixedUpdate frames deterministically: pop one per frame
+        let entity = app.world_mut().spawn(queue).id();
+
+        // Warm up startup; then tick 5 FixedUpdate frames (one pop per frame).
+        app.update();
         for _ in 0..5 {
             app.update();
-            q.pop_front();
         }
+
+        let q = app.world().get::<OrderQueue>(entity).unwrap();
         assert_eq!(q.len(), 5);
         assert_eq!(q.front(), Some(&Order::FlyTo(Vec3::new(5.0, 0.0, 0.0))));
+        // Full FIFO order is intact via `get`/`iter`.
+        for (idx, order) in q.iter().enumerate() {
+            assert_eq!(
+                *order,
+                Order::FlyTo(Vec3::new((idx as f32) + 5.0, 0.0, 0.0))
+            );
+        }
+    }
+
+    #[test]
+    fn system_sets_chain_in_fixed_update_order() {
+        // Verifies the `FixedUpdate: (Economy->Ai->Movement->Mining->Combat).chain()`
+        // ordering is deterministic: systems in earlier sets run before later sets
+        // within the same `FixedUpdate` tick.
+        use bevy::time::{Fixed, Time, TimeUpdateStrategy};
+
+        #[derive(Resource, Default)]
+        struct OrderLog(Vec<&'static str>);
+
+        fn economy_sys(mut log: ResMut<OrderLog>) {
+            log.0.push("economy");
+        }
+        fn ai_sys(mut log: ResMut<OrderLog>) {
+            log.0.push("ai");
+        }
+        fn movement_sys(mut log: ResMut<OrderLog>) {
+            log.0.push("movement");
+        }
+        fn mining_sys(mut log: ResMut<OrderLog>) {
+            log.0.push("mining");
+        }
+        fn combat_sys(mut log: ResMut<OrderLog>) {
+            log.0.push("combat");
+        }
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, SimPlugin));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(
+            Time::<Fixed>::default().timestep(),
+        ));
+        app.init_resource::<OrderLog>();
+        app.add_systems(FixedUpdate, economy_sys.in_set(EconomySet));
+        app.add_systems(FixedUpdate, ai_sys.in_set(AiSet));
+        app.add_systems(FixedUpdate, movement_sys.in_set(MovementSet));
+        app.add_systems(FixedUpdate, mining_sys.in_set(MiningSet));
+        app.add_systems(FixedUpdate, combat_sys.in_set(CombatSet));
+
+        app.update(); // warm up startup
+        app.world_mut().resource_mut::<OrderLog>().0.clear();
+        app.update(); // one deterministic FixedUpdate tick
+
+        let log = app.world().resource::<OrderLog>().0.clone();
+        assert_eq!(log, vec!["economy", "ai", "movement", "mining", "combat"]);
     }
 }
