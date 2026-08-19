@@ -33,11 +33,7 @@ use thiserror::Error;
 /// map these via `anyhow::Context` / `?`.
 #[derive(Debug, Error)]
 pub enum DataError {
-    /// Low-level `ron::Error` (e.g. from `ron::from_str` on a string).
-    #[error("ron parse error: {0}")]
-    Ron(#[from] ron::Error),
-
-    /// Spanned RON error (line/column annotated).
+    /// Spanned RON error (line/column annotated) from `ron::from_str`.
     #[error("ron spanned error: {0}")]
     Spanned(#[from] ron::error::SpannedError),
 
@@ -49,6 +45,15 @@ pub enum DataError {
         /// Underlying IO error.
         #[source]
         source: std::io::Error,
+    },
+
+    /// Domain validation failure (e.g. negative `speed` or `mining_range < orbit_range`).
+    #[error("validation failed for {field}: {message}")]
+    Validation {
+        /// Field or invariant that failed validation.
+        field: String,
+        /// Human-readable reason (lowercase, no trailing punctuation per `err-lowercase-msg`).
+        message: String,
     },
 }
 
@@ -70,7 +75,7 @@ pub struct WareTemplate {
 
 /// Registry wrapper matching the on-disk shape `(wares: [...])` in
 /// `assets/data/wares.ron`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Reflect, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Reflect)]
 pub struct WaresRegistry {
     /// All ware definitions.
     pub wares: Vec<WareTemplate>,
@@ -113,23 +118,84 @@ pub struct ShipTemplate {
 }
 
 // ---------------------------------------------------------------------------
+// Validation (err-custom-type, err-lowercase-msg, num-float-compare)
+// ---------------------------------------------------------------------------
+
+fn validation_err(field: impl Into<String>, message: impl Into<String>) -> DataError {
+    DataError::Validation {
+        field: field.into(),
+        message: message.into(),
+    }
+}
+
+fn ensure_finite_positive(value: f32, field: &str) -> Result<(), DataError> {
+    if !value.is_finite() {
+        return Err(validation_err(field, "must be finite"));
+    }
+    if value <= 0.0 {
+        return Err(validation_err(field, "must be positive"));
+    }
+    Ok(())
+}
+
+fn validate_ware(ware: &WareTemplate) -> Result<(), DataError> {
+    if ware.id.trim().is_empty() {
+        return Err(validation_err("id", "must be non-empty"));
+    }
+    ensure_finite_positive(ware.volume, "volume")?;
+    Ok(())
+}
+
+fn validate_wares_registry(reg: &WaresRegistry) -> Result<(), DataError> {
+    for ware in &reg.wares {
+        validate_ware(ware)?;
+    }
+    Ok(())
+}
+
+fn validate_ship(ship: &ShipTemplate) -> Result<(), DataError> {
+    if ship.id.trim().is_empty() {
+        return Err(validation_err("id", "must be non-empty"));
+    }
+    ensure_finite_positive(ship.speed, "speed")?;
+    ensure_finite_positive(ship.cargo_capacity, "cargo_capacity")?;
+    ensure_finite_positive(ship.mining_range, "mining_range")?;
+    ensure_finite_positive(ship.cycle_secs, "cycle_secs")?;
+    ensure_finite_positive(ship.orbit_range, "orbit_range")?;
+    if ship.yield_per_cycle == 0 {
+        return Err(validation_err("yield_per_cycle", "must be positive"));
+    }
+    if ship.mining_range < ship.orbit_range {
+        return Err(validation_err("mining_range", "must be >= orbit_range"));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Parse helpers
 // ---------------------------------------------------------------------------
 
 /// Parse a `WaresRegistry` from a RON string.
 ///
 /// # Errors
-/// Returns [`DataError::Spanned`] or [`DataError::Ron`] if the RON is invalid.
+/// Returns [`DataError::Spanned`] if the RON is invalid, or
+/// [`DataError::Validation`] if domain invariants are violated.
 pub fn parse_wares_ron(ron_str: &str) -> Result<WaresRegistry, DataError> {
-    Ok(ron::from_str(ron_str)?)
+    let reg: WaresRegistry = ron::from_str(ron_str)?;
+    validate_wares_registry(&reg)?;
+    Ok(reg)
 }
 
 /// Parse a [`ShipTemplate`] from a RON string.
 ///
 /// # Errors
-/// Returns [`DataError::Spanned`] or [`DataError::Ron`] if the RON is invalid.
+/// Returns [`DataError::Spanned`] if the RON is invalid, or
+/// [`DataError::Validation`] if domain invariants are violated (e.g.
+/// negative `speed` or `mining_range < orbit_range`).
 pub fn parse_ship_ron(ron_str: &str) -> Result<ShipTemplate, DataError> {
-    Ok(ron::from_str(ron_str)?)
+    let ship: ShipTemplate = ron::from_str(ron_str)?;
+    validate_ship(&ship)?;
+    Ok(ship)
 }
 
 fn read_file(path: &std::path::Path) -> Result<String, DataError> {
@@ -139,24 +205,30 @@ fn read_file(path: &std::path::Path) -> Result<String, DataError> {
     })
 }
 
+fn load_via_parse<T, F>(path: &std::path::Path, parse: F) -> Result<T, DataError>
+where
+    F: Fn(&str) -> Result<T, DataError>,
+{
+    let content = read_file(path)?;
+    parse(&content)
+}
+
 /// Load a [`WaresRegistry`] from a file on disk.
 ///
 /// # Errors
-/// Returns [`DataError::Io`] if the file cannot be read, or a RON error if
-/// parsing fails.
+/// Returns [`DataError::Io`] if the file cannot be read, or a RON/validation
+/// error if parsing fails.
 pub fn load_wares_file(path: impl AsRef<std::path::Path>) -> Result<WaresRegistry, DataError> {
-    let content = read_file(path.as_ref())?;
-    parse_wares_ron(&content)
+    load_via_parse(path.as_ref(), parse_wares_ron)
 }
 
 /// Load a [`ShipTemplate`] from a file on disk.
 ///
 /// # Errors
-/// Returns [`DataError::Io`] if the file cannot be read, or a RON error if
-/// parsing fails.
+/// Returns [`DataError::Io`] if the file cannot be read, or a RON/validation
+/// error if parsing fails.
 pub fn load_ship_file(path: impl AsRef<std::path::Path>) -> Result<ShipTemplate, DataError> {
-    let content = read_file(path.as_ref())?;
-    parse_ship_ron(&content)
+    load_via_parse(path.as_ref(), parse_ship_ron)
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +300,72 @@ mod tests {
         let bad = "(wares: [ (id: \"ore\", volume: )] )";
         let err = parse_wares_ron(bad).unwrap_err();
         // Should be a RON parse error, not panic
-        assert!(matches!(err, DataError::Spanned(_) | DataError::Ron(_)));
+        assert!(matches!(err, DataError::Spanned(_)));
+    }
+
+    #[test]
+    fn wares_validation_rejects_negative_volume() {
+        let bad = r#"(wares: [(id: "ore", volume: -1.0)])"#;
+        let err = parse_wares_ron(bad).unwrap_err();
+        assert!(matches!(err, DataError::Validation { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("volume"));
+    }
+
+    #[test]
+    fn wares_validation_rejects_non_finite_volume() {
+        let bad = r#"(wares: [(id: "ore", volume: NaN)])"#;
+        // ron parses NaN as float; validation must reject
+        let err = parse_wares_ron(bad).unwrap_err();
+        assert!(matches!(err, DataError::Validation { .. }));
+    }
+
+    #[test]
+    fn wares_validation_rejects_empty_id() {
+        let bad = r#"(wares: [(id: "", volume: 1.0)])"#;
+        let err = parse_wares_ron(bad).unwrap_err();
+        assert!(matches!(err, DataError::Validation { .. }));
+    }
+
+    #[test]
+    fn ship_validation_rejects_negative_speed() {
+        let bad = r#"(
+            id: "miner", speed: -10.0, cargo_capacity: 100.0,
+            mining_range: 1500.0, cycle_secs: 5.0, yield_per_cycle: 10, orbit_range: 1000.0
+        )"#;
+        let err = parse_ship_ron(bad).unwrap_err();
+        assert!(matches!(err, DataError::Validation { .. }));
+        assert!(err.to_string().contains("speed"));
+    }
+
+    #[test]
+    fn ship_validation_rejects_mining_range_lt_orbit_range() {
+        let bad = r#"(
+            id: "miner", speed: 75.0, cargo_capacity: 100.0,
+            mining_range: 500.0, cycle_secs: 5.0, yield_per_cycle: 10, orbit_range: 1000.0
+        )"#;
+        let err = parse_ship_ron(bad).unwrap_err();
+        assert!(matches!(err, DataError::Validation { ref field, .. } if field == "mining_range"));
+    }
+
+    #[test]
+    fn ship_validation_rejects_zero_yield() {
+        let bad = r#"(
+            id: "miner", speed: 75.0, cargo_capacity: 100.0,
+            mining_range: 1500.0, cycle_secs: 5.0, yield_per_cycle: 0, orbit_range: 1000.0
+        )"#;
+        let err = parse_ship_ron(bad).unwrap_err();
+        assert!(matches!(err, DataError::Validation { .. }));
+    }
+
+    #[test]
+    fn ship_validation_rejects_non_finite_cycle_secs() {
+        let bad = r#"(
+            id: "miner", speed: 75.0, cargo_capacity: 100.0,
+            mining_range: 1500.0, cycle_secs: inf, yield_per_cycle: 10, orbit_range: 1000.0
+        )"#;
+        let err = parse_ship_ron(bad).unwrap_err();
+        assert!(matches!(err, DataError::Validation { .. }));
     }
 
     #[test]
