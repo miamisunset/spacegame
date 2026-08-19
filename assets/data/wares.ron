@@ -1,0 +1,5 @@
+(
+    wares: [
+        // Example: (id: "energy_cell", base_price: 10),
+    ],
+)

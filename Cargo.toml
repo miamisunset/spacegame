@@ -1,0 +1,24 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.dependencies]
+bevy = { version = "0.19", default-features = false, features = ["bevy_asset", "bevy_state", "bevy_scene"] }
+thiserror = "2"
+anyhow = "1"
+ron = "0.8"
+postcard = { version = "1", features = ["use-std"] }
+serde = { version = "1", features = ["derive"] }
+
+[package]
+name = "spacegame"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { workspace = true, features = ["2d", "3d", "bevy_pbr", "bevy_ui", "audio", "bevy_gltf", "bevy_feathers"] }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+ron = { workspace = true }
+postcard = { workspace = true }
+serde = { workspace = true }

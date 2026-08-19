@@ -1,0 +1,9 @@
+[package]
+name = "spacegame_render"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { workspace = true, features = ["2d", "3d", "bevy_pbr"] }
+thiserror = { workspace = true }
+serde = { workspace = true }

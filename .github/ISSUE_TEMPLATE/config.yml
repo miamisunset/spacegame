@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/anomalyco/opencode/discussions
+    about: Use Discussions for questions and ideas, not Issues
+  - name: Domain & ADRs
+    url: https://github.com/anomalyco/opencode/blob/main/docs/agents/domain.md
+    about: Read CONTEXT.md and docs/adr/ before filing — use the project's vocabulary

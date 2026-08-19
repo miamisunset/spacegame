@@ -1,0 +1,111 @@
+name: Feature request
+description: New system, station, economy, fleet or UI behavior — a player-facing enhancement.
+title: "[Feature] "
+labels: ["needs-triage", "enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > Enhancement request. Triage will categorize, check redundancy via domain vocabulary, run grilling/domain-modeling if needed, then move to `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix` (with `.out-of-scope/`).
+        > Don't write an Agent Brief here — triage adds it when the spec is durable. See `triage/AGENT-BRIEF.md`.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: The player/dev problem from the user's perspective. No implementation.
+      placeholder: e.g. As a trader I can't automate supply routes — I manually re-issue move+trade orders every SETA tick
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Solution (player perspective)
+      description: Desired behavior after the feature lands. Avoid “how” (file paths, line numbers).
+      placeholder: |
+        - Order queue (X4-style) per ship/fleet: Move → Dock → Trade → Loop
+        - Loop toggle persists across saves; orders tick in FixedUpdate
+    validations:
+      required: true
+
+  - type: textarea
+    id: stories
+    attributes:
+      label: User Stories
+      description: One per line, “As a … I want … so that …”. Triage will expand this. No need to be exhaustive now.
+      placeholder: |
+        1. As a trader, I want to queue buy+ sell orders, so that my freighter loops without babysitting
+        2. As a fleet commander, I want to copy orders to squad, so that I scale empire logistics
+      value: |
+        1. As a
+    validations:
+      required: true
+
+  - type: textarea
+    id: interfaces
+    attributes:
+      label: Key interfaces / seams (optional, for spec depth)
+      description: Types, components, resources, or behaviors you expect to change — durability over precision (no file paths). Leave blank if unsure; to-spec will propose seams.
+      placeholder: |
+        - Component OrderQueue { orders: Vec<Order> } + OrderKind { Move, Dock, Trade(WareId, i32) }
+        - System MovementSet resolves queued orders in FixedUpdate, ordered after EconomySet
+        - RON wares.ron unchanged; new order state is ECS (postcard-saved)
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria (draft)
+      description: How you'll know it's done — testable, independent criteria. Triage/agent-brief will finalize.
+      placeholder: |
+        - [ ] Queued loop executes deterministically with seeded WyRand over 10k ticks
+        - [ ] Queue persists via postcard save and round-trips
+        - [ ] cargo test -p spacegame_sim --all-features passes without window
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Sim (economy / AI / orders / market)
+        - Data (RON templates / registries)
+        - Persist (save/load)
+        - Render (meshes / materials / lighting)
+        - UI (Feathers / bsn! )
+        - Build / Tooling
+        - Unknown
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Out of scope
+      description: What this feature should NOT do — prevents gold-plating.
+      placeholder: e.g. Fleet combat AI, sector map UI, gate travel — separate issues
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Further Notes / References
+      description: Links to ADR, prototype snippet (trim to decision-rich parts), or related issues.
+      placeholder: Related ADR-0001, prototype state machine, #42
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks before filing
+      options:
+        - label: I checked CONTEXT.md vocabulary and used the project's terms (or noted a gap)
+          required: false
+        - label: I checked `.out-of-scope/` and existing issues for a prior rejection/duplicate
+          required: false

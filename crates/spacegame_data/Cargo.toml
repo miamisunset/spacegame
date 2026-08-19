@@ -1,0 +1,10 @@
+[package]
+name = "spacegame_data"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { workspace = true }
+thiserror = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }

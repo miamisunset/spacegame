@@ -1,0 +1,5 @@
+(
+    id: "trading_post",
+    mass: 50000.0,
+    armor: 500.0,
+)

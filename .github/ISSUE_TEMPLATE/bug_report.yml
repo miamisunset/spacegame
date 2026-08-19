@@ -1,0 +1,112 @@
+name: Bug report
+description: Something is broken — steps to reproduce a defect.
+title: "[Bug] "
+labels: ["needs-triage", "bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > Brief, triage-friendly bug report. Triage will verify the claim, check `.out-of-scope/`, and move you to `needs-info` / `ready-for-agent` / `wontfix`.
+        > Use `AGENT-BRIEF.md` structure when this becomes `ready-for-agent` — triage will add the Agent Brief.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One-line, player/dev-facing description of the broken behavior.
+      placeholder: e.g. Traders ignore station cargo limits and overfill to -1 wares
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behavior
+      description: What happens now (broken path). Include the code path or system if known — avoid file paths that go stale.
+      placeholder: |
+        - SystemSet / System: EconomySet::resolve_trades in FixedUpdate
+        - Observed: negative inventory after 10k ticks with seed 42
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected / Desired behavior
+      description: What should happen instead. Include edge cases.
+      placeholder: Inventory clamps at 0; transaction rejected and logged via bevy::log::warn!
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal repro. Triage will try to reproduce before grilling.
+      placeholder: |
+        1. cargo test -p spacegame_sim market_negative -- --nocapture
+        2. Seed WyRand 42, run 10k FixedUpdate ticks
+        3. Assert inventory >= 0 fails
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence (logs, screenshots, save)
+      description: Paste `RUST_LOG` output, `postcard` save hash, or clip.
+      placeholder: |
+        ```
+        WARN spacegame_sim::market: inventory underflow station=0x... ware=energy
+        ```
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Helps triage pick the right ADR / SystemSet context.
+      options:
+        - Sim (economy / AI / orders / market)
+        - Data (RON templates / registries)
+        - Persist (save/load)
+        - Render (meshes / materials / lighting)
+        - UI (Feathers / bsn! )
+        - Build / Tooling
+        - Unknown
+      default: 0
+    validations:
+      required: true
+
+  - type: input
+    id: bevy
+    attributes:
+      label: Bevy / Crate versions
+      description: From Cargo.toml workspace.dependencies
+      placeholder: bevy 0.19, spacegame_sim 0.1.0
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks before filing
+      options:
+        - label: I searched existing issues and `.out-of-scope/` for a duplicate
+          required: false
+        - label: I used the project's domain vocabulary (CONTEXT.md) or noted a gap
+          required: false
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope (optional)
+      description: Adjacent things this bug fix should NOT address.
+      placeholder: e.g. Don't rebalance ware prices here — separate enhancement.
+    validations:
+      required: false
