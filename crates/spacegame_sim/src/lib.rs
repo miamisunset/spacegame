@@ -5,6 +5,7 @@
 //! [`GameState::Simulating`] gating and ordered [`SystemSet`]s.
 
 use bevy::prelude::*;
+use spacegame_data::Distance;
 use std::collections::VecDeque;
 
 // ---------------------------------------------------------------------------
@@ -58,8 +59,8 @@ pub enum Order {
     FlyTo(Vec3),
     /// Close distance to an entity (e.g. asteroid).
     Approach(Entity),
-    /// Hold tangential velocity at `range` around an entity.
-    Orbit(Entity, f32),
+    /// Hold tangential velocity at `orbit_range` around an entity.
+    Orbit(Entity, Distance),
     /// Persistent looping mine of an entity while in `mining_range`.
     Mine(Entity),
 }
@@ -92,11 +93,6 @@ impl OrderQueue {
     /// Push an order to the back (FIFO).
     pub fn push_back(&mut self, order: Order) {
         self.orders.push_back(order);
-    }
-
-    /// Push an order to the front (for preemption, not used in slice 1 but handy).
-    pub fn push_front(&mut self, order: Order) {
-        self.orders.push_front(order);
     }
 
     /// Pop and return the front order.
@@ -194,7 +190,10 @@ mod tests {
 
         q.push_back(Order::FlyTo(Vec3::new(1.0, 0.0, 0.0)));
         q.push_back(Order::Approach(entities[0]));
-        q.push_back(Order::Orbit(entities[1], 1000.0));
+        q.push_back(Order::Orbit(
+            entities[1],
+            Distance::new(1000.0).expect("valid distance"),
+        ));
         q.push_back(Order::Mine(entities[2]));
 
         // Assert — FIFO order preserved
@@ -280,10 +279,14 @@ mod tests {
 
     #[test]
     fn fixed_update_sets_only_tick_in_simulating() {
-        // Prove in_state gating: a FixedUpdate counter should tick when Simulating,
-        // and halt when Paused. We drive FixedUpdate directly via run_schedule to
-        // avoid wall-clock / TimeUpdateStrategy flakiness while still proving
-        // the `in_state` run condition on the configured SystemSets.
+        // Prove `in_state(GameState::Simulating)` gating on `FixedUpdate`.
+        // Uses `TimeUpdateStrategy::ManualDuration` for deterministic SETA-like
+        // ticking: each `app.update()` advances virtual time by exactly one
+        // fixed timestep, so `FixedUpdate` runs once per update while Simulating
+        // and zero times when Paused. Delta-based assertions tolerate the
+        // initial startup tick.
+        use bevy::time::{Fixed, Time, TimeUpdateStrategy};
+
         #[derive(Resource, Default, Debug, PartialEq, Eq)]
         struct TickCount(u32);
 
@@ -293,17 +296,21 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, SimPlugin));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(
+            Time::<Fixed>::default().timestep(),
+        ));
         app.init_resource::<TickCount>();
         // Put counting_system in MovementSet so it inherits the set's gating.
         app.add_systems(FixedUpdate, counting_system.in_set(MovementSet));
-        // Ensure startup + state init have run before we start counting.
+        // Warm up startup + state init; capture baseline.
         app.update();
+        let base = app.world().resource::<TickCount>().0;
 
-        // Simulating -> ticks (each run_schedule(FixedUpdate) => one increment)
+        // Simulating -> ticks (one FixedUpdate per app.update)
         for _ in 0..3 {
-            app.world_mut().run_schedule(FixedUpdate);
+            app.update();
         }
-        let count_sim = app.world().resource::<TickCount>().0;
+        let count_sim = app.world().resource::<TickCount>().0 - base;
         assert_eq!(
             count_sim, 3,
             "should have ticked 3 times in Simulating, got {count_sim}"
@@ -316,7 +323,7 @@ mod tests {
         app.update(); // apply StateTransition
         let prev = app.world().resource::<TickCount>().0;
         for _ in 0..3 {
-            app.world_mut().run_schedule(FixedUpdate);
+            app.update();
         }
         let after = app.world().resource::<TickCount>().0;
         assert_eq!(
