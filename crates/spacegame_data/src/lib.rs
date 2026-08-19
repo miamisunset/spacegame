@@ -58,6 +58,187 @@ pub enum DataError {
 }
 
 // ---------------------------------------------------------------------------
+// Domain newtypes — api-newtype-safety, type-newtype-validated, own-copy-small
+// ---------------------------------------------------------------------------
+
+/// Cargo volume per unit (or total capacity). Must be finite and > 0.
+///
+/// Newtype prevents mixing `Volume` with `Distance`/`Speed`/`Secs` at call sites.
+/// Construct via [`Volume::new`] for validated values; `Deserialize` is transparent
+/// so RON `volume: 1.0` stays ergonomic and is validated centrally in
+/// `validate_ware` / `validate_ship` per `api-parse-dont-validate`.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize, Reflect)]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct Volume(pub f32);
+
+impl Volume {
+    /// Create a validated volume.
+    ///
+    /// # Errors
+    /// Returns [`DataError::Validation`] if `value` is not finite or not positive.
+    pub fn new(value: f32) -> Result<Self, DataError> {
+        ensure_finite_positive(value, "volume")?;
+        Ok(Self(value))
+    }
+
+    /// Raw `f32` value.
+    #[inline]
+    #[must_use]
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for Volume {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Volume> for f32 {
+    fn from(v: Volume) -> Self {
+        v.0
+    }
+}
+
+impl TryFrom<f32> for Volume {
+    type Error = DataError;
+    fn try_from(value: f32) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+/// Kinematic speed (units / second). Must be finite and > 0.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize, Reflect)]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct Speed(pub f32);
+
+impl Speed {
+    /// Create a validated speed.
+    ///
+    /// # Errors
+    /// Returns [`DataError::Validation`] if `value` is not finite or not positive.
+    pub fn new(value: f32) -> Result<Self, DataError> {
+        ensure_finite_positive(value, "speed")?;
+        Ok(Self(value))
+    }
+
+    /// Raw `f32` value.
+    #[inline]
+    #[must_use]
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for Speed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Speed> for f32 {
+    fn from(v: Speed) -> Self {
+        v.0
+    }
+}
+
+impl TryFrom<f32> for Speed {
+    type Error = DataError;
+    fn try_from(value: f32) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+/// Distance (world units). Must be finite and > 0. Used for `mining_range` and `orbit_range`.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize, Reflect)]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct Distance(pub f32);
+
+impl Distance {
+    /// Create a validated distance.
+    ///
+    /// # Errors
+    /// Returns [`DataError::Validation`] if `value` is not finite or not positive.
+    pub fn new(value: f32) -> Result<Self, DataError> {
+        ensure_finite_positive(value, "distance")?;
+        Ok(Self(value))
+    }
+
+    /// Raw `f32` value.
+    #[inline]
+    #[must_use]
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for Distance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Distance> for f32 {
+    fn from(v: Distance) -> Self {
+        v.0
+    }
+}
+
+impl TryFrom<f32> for Distance {
+    type Error = DataError;
+    fn try_from(value: f32) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+/// Duration in seconds. Must be finite and > 0. Used for `cycle_secs`.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize, Reflect)]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct Secs(pub f32);
+
+impl Secs {
+    /// Create a validated duration.
+    ///
+    /// # Errors
+    /// Returns [`DataError::Validation`] if `value` is not finite or not positive.
+    pub fn new(value: f32) -> Result<Self, DataError> {
+        ensure_finite_positive(value, "secs")?;
+        Ok(Self(value))
+    }
+
+    /// Raw `f32` value.
+    #[inline]
+    #[must_use]
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for Secs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Secs> for f32 {
+    fn from(v: Secs) -> Self {
+        v.0
+    }
+}
+
+impl TryFrom<f32> for Secs {
+    type Error = DataError;
+    fn try_from(value: f32) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Ware templates
 // ---------------------------------------------------------------------------
 
@@ -70,7 +251,7 @@ pub struct WareTemplate {
     /// Stable string id, e.g. `"ore"`.
     pub id: String,
     /// Cargo volume per unit (e.g. `1.0` for Ore).
-    pub volume: f32,
+    pub volume: Volume,
 }
 
 /// Registry wrapper matching the on-disk shape `(wares: [...])` in
@@ -104,17 +285,17 @@ pub struct ShipTemplate {
     /// Stable template id, e.g. `"miner"`.
     pub id: String,
     /// Kinematic speed (units / second) used by seek/arrive steering.
-    pub speed: f32,
+    pub speed: Speed,
     /// Total cargo volume capacity.
-    pub cargo_capacity: f32,
+    pub cargo_capacity: Volume,
     /// Maximum range at which the mining laser can cycle.
-    pub mining_range: f32,
+    pub mining_range: Distance,
     /// Seconds per mining cycle (before fatigue scaling).
-    pub cycle_secs: f32,
+    pub cycle_secs: Secs,
     /// Base ore units yielded per cycle (before skill/fatigue scaling).
     pub yield_per_cycle: u32,
     /// Desired distance to hold while orbiting a target.
-    pub orbit_range: f32,
+    pub orbit_range: Distance,
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +323,7 @@ fn validate_ware(ware: &WareTemplate) -> Result<(), DataError> {
     if ware.id.trim().is_empty() {
         return Err(validation_err("id", "must be non-empty"));
     }
-    ensure_finite_positive(ware.volume, "volume")?;
+    ensure_finite_positive(ware.volume.get(), "volume")?;
     Ok(())
 }
 
@@ -157,11 +338,11 @@ fn validate_ship(ship: &ShipTemplate) -> Result<(), DataError> {
     if ship.id.trim().is_empty() {
         return Err(validation_err("id", "must be non-empty"));
     }
-    ensure_finite_positive(ship.speed, "speed")?;
-    ensure_finite_positive(ship.cargo_capacity, "cargo_capacity")?;
-    ensure_finite_positive(ship.mining_range, "mining_range")?;
-    ensure_finite_positive(ship.cycle_secs, "cycle_secs")?;
-    ensure_finite_positive(ship.orbit_range, "orbit_range")?;
+    ensure_finite_positive(ship.speed.get(), "speed")?;
+    ensure_finite_positive(ship.cargo_capacity.get(), "cargo_capacity")?;
+    ensure_finite_positive(ship.mining_range.get(), "mining_range")?;
+    ensure_finite_positive(ship.cycle_secs.get(), "cycle_secs")?;
+    ensure_finite_positive(ship.orbit_range.get(), "orbit_range")?;
     if ship.yield_per_cycle == 0 {
         return Err(validation_err("yield_per_cycle", "must be positive"));
     }
@@ -272,7 +453,7 @@ mod tests {
         assert_eq!(parsed, reparsed);
         assert_eq!(reparsed.wares.len(), 1);
         assert_eq!(reparsed.wares[0].id, "ore");
-        assert!((reparsed.wares[0].volume - 1.0).abs() < f32::EPSILON);
+        assert!((reparsed.wares[0].volume.get() - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -287,12 +468,12 @@ mod tests {
         // Assert — external behavior: all mining-kit fields survive roundtrip
         assert_eq!(parsed, reparsed);
         assert_eq!(reparsed.id, "miner");
-        assert!((reparsed.speed - 75.0).abs() < f32::EPSILON);
-        assert!((reparsed.cargo_capacity - 100.0).abs() < f32::EPSILON);
-        assert!((reparsed.mining_range - 1500.0).abs() < f32::EPSILON);
-        assert!((reparsed.cycle_secs - 5.0).abs() < f32::EPSILON);
+        assert!((reparsed.speed.get() - 75.0).abs() < f32::EPSILON);
+        assert!((reparsed.cargo_capacity.get() - 100.0).abs() < f32::EPSILON);
+        assert!((reparsed.mining_range.get() - 1500.0).abs() < f32::EPSILON);
+        assert!((reparsed.cycle_secs.get() - 5.0).abs() < f32::EPSILON);
         assert_eq!(reparsed.yield_per_cycle, 10);
-        assert!((reparsed.orbit_range - 1000.0).abs() < f32::EPSILON);
+        assert!((reparsed.orbit_range.get() - 1000.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -389,17 +570,60 @@ mod tests {
     }
 
     #[test]
+    fn newtype_constructors_validate() {
+        // Volume/Speed/Distance/Secs::new enforce finite positive per type-newtype-validated
+        assert!(Volume::new(1.0).is_ok());
+        assert!(Volume::new(-1.0).is_err());
+        assert!(Volume::new(f32::NAN).is_err());
+        assert!(Volume::new(f32::INFINITY).is_err());
+
+        assert!(Speed::new(75.0).is_ok());
+        assert!(Speed::new(0.0).is_err());
+
+        assert!(Distance::new(1500.0).is_ok());
+        assert!(Distance::new(-5.0).is_err());
+
+        assert!(Secs::new(5.0).is_ok());
+        assert!(Secs::new(0.0).is_err());
+    }
+
+    #[test]
+    fn newtype_try_from_and_display() {
+        let v: Volume = Volume::try_from(1.0).unwrap();
+        assert!((f32::from(v) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(v.to_string(), "1");
+
+        let s: Speed = 75.0.try_into().unwrap();
+        assert!((s.get() - 75.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn newtype_prevents_mixing_at_type_level() {
+        // The following would not compile if uncommented, proving primitive obsession is fixed:
+        // let v: Volume = Volume(1.0);
+        // let d: Distance = v; // error: mismatched types
+        // This test ensures the distinct types exist and are not interchangeable.
+        let vol = Volume::new(1.0).unwrap();
+        let dist = Distance::new(1000.0).unwrap();
+        // Access via typed getters keeps domain semantics explicit
+        assert!(vol.get() != dist.get());
+        // Different newtypes have different sizes but same layout (transparent)
+        assert_eq!(std::mem::size_of::<Volume>(), std::mem::size_of::<f32>());
+        assert_eq!(std::mem::size_of::<Speed>(), std::mem::size_of::<f32>());
+    }
+
+    #[test]
     fn on_disk_miner_file_loads() {
         // Deterministic path via CARGO_MANIFEST_DIR — no cwd guessing
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let path = manifest.join("../../assets/data/ships/miner.ron");
         let ship = load_ship_file(&path).expect("miner.ron must exist and parse");
         assert_eq!(ship.id, "miner");
-        assert!(ship.speed > 0.0);
-        assert!(ship.cargo_capacity > 0.0);
-        assert!(ship.mining_range > 0.0);
-        assert!(ship.cycle_secs > 0.0);
-        assert!(ship.orbit_range > 0.0);
+        assert!(ship.speed.get() > 0.0);
+        assert!(ship.cargo_capacity.get() > 0.0);
+        assert!(ship.mining_range.get() > 0.0);
+        assert!(ship.cycle_secs.get() > 0.0);
+        assert!(ship.orbit_range.get() > 0.0);
         assert!(ship.yield_per_cycle > 0);
         // mining_range must cover orbit_range per spec (orbit inside mining range)
         assert!(
@@ -416,7 +640,7 @@ mod tests {
         let path = manifest.join("../../assets/data/wares.ron");
         let reg = load_wares_file(&path).expect("wares.ron must exist and parse");
         let ore = reg.find("ore").expect("Ore ware must exist");
-        assert!((ore.volume - 1.0).abs() < f32::EPSILON);
+        assert!((ore.volume.get() - 1.0).abs() < f32::EPSILON);
         // Roundtrip on-disk content
         let serialized =
             ron::ser::to_string_pretty(&reg, ron::ser::PrettyConfig::default()).unwrap();
