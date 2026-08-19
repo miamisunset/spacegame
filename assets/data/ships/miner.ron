@@ -1,0 +1,9 @@
+(
+    id: "miner",
+    speed: 75.0,
+    cargo_capacity: 100.0,
+    mining_range: 1500.0,
+    cycle_secs: 5.0,
+    yield_per_cycle: 10,
+    orbit_range: 1000.0,
+)
