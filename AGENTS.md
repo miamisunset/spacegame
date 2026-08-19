@@ -200,6 +200,18 @@ cargo test -p {crate-name} --all-features
 - Invariants: closed-economy `total_credits + ware_value` constant, no negative wares.
 - Headless: `cargo test -p spacegame_sim --all-features` must pass without a window; `cargo bench -p spacegame_sim` budgets market tick < 2ms at 1k stations.
 
+## Git Workflow
+
+### 1. Branching Strategy
+- **Rule:** Never modify or commit code directly to the `main` branch. 
+- **Workflow:** For every new feature or refactor request, use local git tools to create a short-lived branch named: `feature/short-description` or `fix/issue-name`.
+
+### 2. Commit Standards (Conventional Commits)
+- **Format:** All commit messages must strictly adhere to the Conventional Commits specification: `<type>(<scope>): <short description>`.
+- **Allowed Types:** `feat` (new features), `fix` (bug fixes), `refactor` (code restructuring), `test` (adding/updating tests).
+- **Example:** `feat(ui): implement spaceship docking`
+- **Constraint:** Keep descriptions present-tense, imperative, and under 72 characters.
+
 ## Persistence & Data
 
 - **Templates vs live state:** `RON` in `assets/data/**` for templates (ship/station/ware/faction attributes); live market (orders, prices, inventories, standing) is ECS `Component`/`Resource` in `spacegame_sim`, not RON.
@@ -222,4 +234,3 @@ cargo clippy --fix -p {crate-name}
 ```
 
 Migration reference: `https://bevy.org/learn/migration-guides/0-18-to-0-19/` (note `0-18` hyphen, not `0.18`).
-
