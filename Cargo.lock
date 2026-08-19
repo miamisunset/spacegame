@@ -4858,6 +4858,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "serde",
+ "spacegame_data",
  "thiserror 2.0.20",
 ]
 
