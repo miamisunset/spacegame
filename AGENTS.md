@@ -101,7 +101,7 @@ Rules:
 
 ## Coding Conventions
 
-### Bevy 0.19 Standards (verified)
+### Bevy 0.19 Standards
 
 - **Scenes & UI — `bsn!`/`bsn_list!` proc-macros:** Use `bsn!`/`bsn_list!` from `bevy_scene` (`bevy::scene::prelude::*`) for **declarative UI (Feathers) and scene hierarchies**, e.g. `bsn!{ Entity { Children [ Entity { Name("child") } ] } }`. Hierarchy maps to `Relationship` / `ChildOf` / `Children`. Spawn via `Commands::spawn_scene` / `World::spawn_scene`. Keeping BSN inline in `spacegame_ui`; do not assume a `.bsn` asset loader — it does not ship in 0.19. Imperative `commands.spawn(...).with_children(...)` remains valid for non-UI / non-scene code and quick sim factories. Old `bevy_scene` is now `bevy_world_serialization` (`Scene` → `WorldAsset`, `SceneRoot` → `WorldAssetRoot`, `DynamicScene` → `DynamicWorld`, builder now needs `&TypeRegistry`).
 
@@ -211,6 +211,10 @@ cargo test -p {crate-name} --all-features
 - **Allowed Types:** `feat` (new features), `fix` (bug fixes), `refactor` (code restructuring), `test` (adding/updating tests).
 - **Example:** `feat(ui): implement spaceship docking`
 - **Constraint:** Keep descriptions present-tense, imperative, and under 72 characters.
+
+### 3. Github
+
+Prefer Github MCP over `gh` command.
 
 ## Persistence & Data
 
