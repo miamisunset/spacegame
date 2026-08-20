@@ -7,12 +7,11 @@
 //! drives the camera on `Update`.
 //!
 //! Determinism: rendering is never on the `FixedUpdate` path; only `SimPlugin`
-//! ticks deterministically. `WyRand` seeding for asteroid positions mirrors
+//! ticks deterministically. `WyRand` seeding for asteroid positions reuses
 //! `spacegame_sim::rng` so visual and headless seeds agree.
 
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
-use spacegame_data::{Distance, Secs, Speed, Volume};
 use spacegame_sim::{Asteroid, Crew, CrewRole, Inventory, MiningLaser, OrderQueue, ShipStats};
 
 /// Marker for the player ship mesh entity (also carries sim components).
@@ -52,6 +51,12 @@ impl Default for StrategicCamera {
     }
 }
 
+/// Camera orbit limits — extracted to avoid Data Clumps / Repeated Switches.
+const CAM_MIN_DISTANCE: f32 = 400.0;
+const CAM_MAX_DISTANCE: f32 = 12000.0;
+const CAM_MIN_PITCH: f32 = -1.45;
+const CAM_MAX_PITCH: f32 = 1.30;
+
 /// Placeholder render plugin for slice 1.
 ///
 /// Spawns cube ship + icosphere asteroids from `Transform` sync,
@@ -72,18 +77,30 @@ impl Plugin for RenderPlugin {
     }
 }
 
+/// Shared asteroid material helper — avoids Duplicated Code between
+/// `setup_scene` and `ensure_asteroid_mesh_system` (`mem-with-capacity` not needed).
+fn asteroid_material(assets: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
+    assets.add(StandardMaterial {
+        base_color: Color::srgb(0.68, 0.52, 0.32),
+        perceptual_roughness: 0.85,
+        metallic: 0.0,
+        ..default()
+    })
+}
+
 /// Spawn slice-1 scene: light, camera, ship cube, two asteroid icospheres.
 ///
-/// Data-driven: attempts to load `assets/data/ships/miner.ron`; falls back to
-/// an inline parse that mirrors that file so the binary never hardcodes stats
-/// without a RON parse path. Asteroid positions use `wyrand_next`-style
-/// seeding to match headless tests.
+/// Data-driven: loads `assets/data/ships/miner.ron` via `spacegame_data`
+/// (no hard-coded stats fallback). Asteroid positions reuse
+/// `spacegame_sim::rng::wyrand_vec3` so visual and headless seeds agree.
+/// `err-no-unwrap-prod` / `err-result-over-panic`: no `unwrap`/`expect` —
+///
+/// failures log via `bevy::log::error!` and early-return without panicking.
 fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Directional light + ambient handled via `DirectionalLight` entity.
     commands.spawn((
         DirectionalLight {
             illuminance: 8000.0,
@@ -92,22 +109,26 @@ fn setup_scene(
         Transform::from_xyz(4000.0, 6000.0, 2000.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    // Camera: StrategicCamera state drives transform; spawn at derived pos.
     let cam = StrategicCamera::default();
     let cam_pos = camera_position(&cam);
     commands.spawn((
         Camera3d::default(),
+        Camera {
+            order: 0,
+            ..default()
+        },
         Transform::from_translation(cam_pos).looking_at(cam.target, Vec3::Y),
-        // Spec future: Camera3d order 0, Camera2d order 1 overlay already in UiPlugin.
-        // Keep Ui camera clear colour transparent so 3d scene shows.
     ));
 
-    // Load miner template data-driven. Try file then fallback.
-    let ship_template = load_miner_template();
+    let Some(ship_template) = load_miner_template() else {
+        bevy::log::error!(
+            "miner template missing — ship not spawned; check assets/data/ships/miner.ron"
+        );
+        return;
+    };
     let stats = ShipStats::from_template(&ship_template);
     let laser = MiningLaser::from_template(&ship_template);
 
-    // Ship: cube placeholder, size ~40×10×60 (long forward Z).
     let ship_mesh = meshes.add(Cuboid::new(40.0, 12.0, 60.0));
     let ship_mat = materials.add(StandardMaterial {
         base_color: Color::srgb(0.35, 0.62, 0.92),
@@ -129,19 +150,18 @@ fn setup_scene(
         ))
         .id();
 
-    // Crew child per CONTEXT.md skeleton.
     commands.spawn((Crew::new(CrewRole::Miner, 0.6, 0.0), ChildOf(ship_entity)));
 
-    // Two asteroids via deterministic WyRand positions (seed 0x9a7b_c3d1, half_extent 5000).
-    let positions = seeded_positions(0x9a7b_c3d1_5e2f_8a01, 2, 5000.0);
+    let positions = spacegame_sim::rng::seeded_positions(0x9a7b_c3d1_5e2f_8a01, 2, 5000.0);
     for pos in positions {
-        let asteroid_mesh = meshes.add(Sphere::new(80.0).mesh().ico(3).unwrap());
-        let asteroid_mat = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.68, 0.52, 0.32),
-            perceptual_roughness: 0.85,
-            metallic: 0.0,
-            ..default()
-        });
+        let asteroid_mesh = match Sphere::new(80.0).mesh().ico(3) {
+            Ok(mesh) => meshes.add(mesh),
+            Err(err) => {
+                bevy::log::error!("failed to build icosphere mesh: {err}");
+                continue;
+            }
+        };
+        let asteroid_mat = asteroid_material(&mut materials);
         commands.spawn((
             AsteroidVisual,
             Asteroid::new(800, 1200),
@@ -152,69 +172,29 @@ fn setup_scene(
     }
 }
 
-/// Load `miner.ron` from disk if present, otherwise parse inline fallback
-/// that mirrors `assets/data/ships/miner.ron`. Keeps data pipeline typed via
-/// `spacegame_data` and avoids hardcoding outside RON parse.
-fn load_miner_template() -> spacegame_data::ShipTemplate {
+/// Load `miner.ron` data-driven via `spacegame_data`.
+///
+/// Returns `None` and logs on failure instead of panicking (`err-no-unwrap-prod`).
+fn load_miner_template() -> Option<spacegame_data::ShipTemplate> {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    // `spacegame_render` crate manifest is `crates/spacegame_render`; backtrack to workspace root.
     let candidate = manifest_dir.join("../../assets/data/ships/miner.ron");
-    if let Ok(tmpl) = spacegame_data::load_ship_file(&candidate) {
-        return tmpl;
+    match spacegame_data::load_ship_file(&candidate) {
+        Ok(tmpl) => Some(tmpl),
+        Err(err) => {
+            bevy::log::error!(
+                "failed to load miner template {}: {err}",
+                candidate.display()
+            );
+            None
+        }
     }
-    // Fallback: parse same shape as `miner.ron`.
-    spacegame_data::parse_ship_ron(
-        r#"(
-            id: "miner",
-            speed: 75.0,
-            cargo_capacity: 100.0,
-            mining_range: 1500.0,
-            cycle_secs: 5.0,
-            yield_per_cycle: 10,
-            orbit_range: 1000.0,
-        )"#,
-    )
-    .expect("fallback miner ron parses")
-}
-
-/// Deterministic WyRand-seeded positions matching `spacegame_sim::rng::wyrand_next`
-/// (splitmix64 variant). Used for visual seeding; do not use `thread_rng`.
-fn seeded_positions(seed: u64, n: usize, half_extent: f32) -> Vec<Vec3> {
-    (0..n as u64)
-        .map(|idx| wyrand_vec3(seed, idx, half_extent))
-        .collect()
-}
-
-fn wyrand_next(state: &mut u64) -> u64 {
-    // Mirrors `spacegame_sim::rng::wyrand_next`.
-    let mut s = *state;
-    s = s.wrapping_add(0x60bee2bee120fc15);
-    let mut t = s.wrapping_mul(0xa3b195354a39b70d);
-    t ^= t >> 32;
-    t = t.wrapping_mul(0xa511e9b123f3b8a7);
-    t ^= t >> 32;
-    *state = s;
-    t
-}
-
-fn wyrand_vec3(seed: u64, idx: u64, half_extent: f32) -> Vec3 {
-    let mut s = seed ^ idx.wrapping_mul(0x9e3779b97f4a7c15);
-    let r1 = wyrand_next(&mut s);
-    let r2 = wyrand_next(&mut s);
-    let r3 = wyrand_next(&mut s);
-    let f = |r: u64| -> f32 {
-        let u = (r & 0xffffffff) as f32 / (u32::MAX as f32);
-        u * 2.0 * half_extent - half_extent
-    };
-    Vec3::new(f(r1), f(r2), f(r3))
 }
 
 /// Compute camera world position from orbit state.
 fn camera_position(cam: &StrategicCamera) -> Vec3 {
+    let pitch = cam.pitch.clamp(CAM_MIN_PITCH, CAM_MAX_PITCH);
+    let dist = cam.distance.clamp(CAM_MIN_DISTANCE, CAM_MAX_DISTANCE);
     let yaw = cam.yaw;
-    let pitch = cam.pitch.clamp(-1.45, 1.30);
-    let dist = cam.distance.clamp(400.0, 12000.0);
-    // Spherical around target: use yaw (Y axis) then pitch.
     let x = dist * pitch.cos() * yaw.sin();
     let y = dist * pitch.sin();
     let z = dist * pitch.cos() * yaw.cos();
@@ -237,11 +217,9 @@ fn camera_controller_system(
     mut camera_q: Query<&mut Transform, With<Camera3d>>,
 ) {
     let dt = time.delta_secs();
-    // Movement speed scaled by distance so pan feels consistent zoomed out.
     let move_speed = (cam.distance * 0.0006 + 120.0) * dt * 60.0;
     let mut delta_target = Vec3::ZERO;
 
-    // Derive forward/right from yaw only (XZ plane), ignore pitch for WASD.
     let yaw = cam.yaw;
     let forward = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
     let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
@@ -264,7 +242,6 @@ fn camera_controller_system(
     if keyboard.pressed(KeyCode::KeyE) {
         delta_target.y += move_speed;
     }
-    // Arrow keys also pan for accessibility.
     if keyboard.pressed(KeyCode::ArrowUp) {
         delta_target += forward * move_speed;
     }
@@ -279,14 +256,11 @@ fn camera_controller_system(
     }
     cam.target += delta_target;
 
-    // Zoom via wheel.
     for ev in mouse_wheel.read() {
-        // Bevy MouseWheel y is in lines; scale to world units.
         let delta = ev.y * cam.distance * 0.08;
-        cam.distance = (cam.distance - delta).clamp(400.0, 12000.0);
+        cam.distance = (cam.distance - delta).clamp(CAM_MIN_DISTANCE, CAM_MAX_DISTANCE);
     }
 
-    // Orbit: right-drag rotates yaw/pitch. Pan: middle-drag translates target.
     let mut yaw_delta: f32 = 0.0;
     let mut pitch_delta: f32 = 0.0;
     let mut pan_delta = Vec2::ZERO;
@@ -299,22 +273,14 @@ fn camera_controller_system(
         }
     }
     cam.yaw += yaw_delta;
-    cam.pitch = (cam.pitch + pitch_delta).clamp(-1.45, 1.30);
+    cam.pitch = (cam.pitch + pitch_delta).clamp(CAM_MIN_PITCH, CAM_MAX_PITCH);
 
     if pan_delta != Vec2::ZERO {
-        // Pan target in camera plane.
         let pan_scale = cam.distance * 0.0012;
         cam.target -= right * pan_delta.x * pan_scale;
-        // Up on screen is world up minus forward component for orbit pitch.
-        let cam_right = right;
-        let cam_up = Vec3::Y;
-        // Use screen Y to move along camera up-ish (approx world Y + pitch).
-        cam.target += cam_up * pan_delta.y * pan_scale;
-        // Compensate: remove this to keep simple xz+up pan (spec allows simple pan).
-        let _ = cam_right;
+        cam.target += Vec3::Y * pan_delta.y * pan_scale;
     }
 
-    // Apply to actual camera Transform.
     let pos = camera_position(&cam);
     for mut tf in &mut camera_q {
         tf.translation = pos;
@@ -326,7 +292,8 @@ fn camera_controller_system(
 ///
 /// Respawned asteroids from `asteroid_respawn_system` spawn bare `Asteroid +
 /// Transform`; this hydrates them with `Mesh3d + MeshMaterial3d + AsteroidVisual`
-/// so the visual and simulation stay in sync.
+/// so the visual and simulation stay in sync. Runs on `Update` — one-frame
+/// visual lag after `FixedUpdate` respawn is acceptable for slice 1.
 #[allow(clippy::type_complexity)]
 fn ensure_asteroid_mesh_system(
     mut commands: Commands,
@@ -335,21 +302,17 @@ fn ensure_asteroid_mesh_system(
     asteroids: Query<(Entity, &Asteroid), (Without<Mesh3d>, Without<AsteroidVisual>)>,
 ) {
     for (entity, asteroid) in &asteroids {
-        // Radius scales slightly with max_ore for visual variety.
         let radius = 60.0 + (asteroid.max_ore as f32 / 1200.0) * 40.0;
-        let mesh = meshes.add(Sphere::new(radius).mesh().ico(3).unwrap());
-        let mat = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.68, 0.52, 0.32),
-            perceptual_roughness: 0.85,
-            ..default()
-        });
+        let mesh = match Sphere::new(radius).mesh().ico(3) {
+            Ok(m) => meshes.add(m),
+            Err(err) => {
+                bevy::log::error!("failed to build asteroid icosphere radius {radius}: {err}");
+                continue;
+            }
+        };
+        let mat = asteroid_material(&mut materials);
         commands
             .entity(entity)
             .insert((AsteroidVisual, Mesh3d(mesh), MeshMaterial3d(mat)));
     }
 }
-
-// Keep lints quiet for intentionally type-safe newtype imports not yet read
-// in `setup_scene` fallback: `Distance`/`Secs` etc are re-exported for future sharding.
-#[allow(unused_imports)]
-fn _assert_newtype_imports(_d: Distance, _s: Speed, _v: Volume, _t: Secs) {}

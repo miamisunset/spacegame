@@ -18,7 +18,7 @@ mod mining;
 mod movement;
 mod order;
 mod plugin;
-mod rng;
+pub mod rng;
 mod sets;
 mod state;
 
