@@ -10,8 +10,10 @@
 //! Left-click or Escape hides it. `Update` only; never `FixedUpdate`.
 
 use bevy::{
+    picking::events::{Click, Pointer},
     prelude::*,
     scene::prelude::{bsn, bsn_list},
+    window::PrimaryWindow,
 };
 use spacegame_sim::{Asteroid, ContextMenuState, GroundPlane, Order, OrderQueue};
 
@@ -41,18 +43,22 @@ impl Plugin for UiPlugin {
         // back to non-deterministic `iter().next()`.
         app.add_observer(on_asteroid_click);
         app.add_observer(on_ground_click);
-        // Right-click context menu observers.
-        app.add_observer(on_asteroid_right_click);
-        app.add_observer(on_left_click_hide_menu);
-        app.add_systems(Startup, setup_ui);
+        // Right-click context menu — raw input + ray cast for reliable detection.
         app.add_systems(
             Update,
             (
-                update_order_queue_overlay,
-                update_context_menu_visibility,
-                hide_menu_on_escape,
+                (
+                    context_menu_right_click_detect,
+                    on_left_click_hide_menu_system,
+                ),
+                (
+                    hide_menu_on_escape,
+                    update_order_queue_overlay,
+                    update_context_menu_visibility,
+                ),
             ),
         );
+        app.add_systems(Startup, setup_ui);
     }
 }
 
@@ -80,31 +86,61 @@ fn on_ground_click(
     }
 }
 
-/// Show context menu on right-click of an asteroid.
+/// Detect right-click on asteroids via raw input + ray cast.
 ///
-/// Uses `click.button` directly — `Pointer<Click>` fires on button release,
-/// so `ButtonInput::pressed()` is already false at that point.
-fn on_asteroid_right_click(
-    click: On<Pointer<Click>>,
+/// Bypasses the picking pipeline entirely — reads `MouseButtonInput` events,
+/// ray-casts from the camera through the cursor, and checks sphere intersection
+/// with asteroid transforms. Shows context menu at cursor position on hit.
+fn context_menu_right_click_detect(
+    mut mouse_events: MessageReader<bevy::input::mouse::MouseButtonInput>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    camera_q: Query<(&Camera, &GlobalTransform)>,
+    asteroids: Query<(&Transform, &Asteroid), Without<Camera>>,
     mut state: ResMut<ContextMenuState>,
-    asteroids: Query<(), With<Asteroid>>,
 ) {
-    if click.button == PointerButton::Secondary && asteroids.contains(click.entity) {
-        let pos = Vec2::new(
-            click.pointer_location.position.x,
-            click.pointer_location.position.y,
-        );
-        *state = ContextMenuState::Shown(pos);
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(cursor_pos) = window.cursor_position() else {
+        return;
+    };
+    let Some((camera, camera_transform)) =
+        camera_q.iter().find(|(c, _)| c.order == 0 && c.is_active)
+    else {
+        return;
+    };
+
+    for ev in mouse_events.read() {
+        if ev.button != MouseButton::Right || !ev.state.is_pressed() {
+            continue;
+        }
+        let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) else {
+            continue;
+        };
+        let hit = asteroids.iter().any(|(tf, _)| {
+            let oc = ray.origin - tf.translation;
+            let dir = *ray.direction;
+            let r = 80.0;
+            let b = oc.dot(dir);
+            let c = oc.dot(oc) - r * r;
+            b * b - c >= 0.0 // a=1 for normalized dir, discriminant = b²-4ac = b²-4c; >=0 when b²>=c (simplified)
+        });
+        if hit {
+            *state = ContextMenuState::Shown(cursor_pos);
+            return;
+        }
     }
 }
 
-/// Hide context menu on any left-click (primary button).
-fn on_left_click_hide_menu(
-    click: On<Pointer<Click>>,
+/// Hide context menu on left-click anywhere via raw input.
+fn on_left_click_hide_menu_system(
+    mut mouse_events: MessageReader<bevy::input::mouse::MouseButtonInput>,
     mut state: ResMut<ContextMenuState>,
 ) {
-    if click.button == PointerButton::Primary {
-        *state = ContextMenuState::Hidden;
+    for ev in mouse_events.read() {
+        if ev.button == MouseButton::Left && ev.state.is_pressed() {
+            *state = ContextMenuState::Hidden;
+        }
     }
 }
 
