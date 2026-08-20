@@ -64,19 +64,17 @@ impl MiningLaser {
 
 /// Helper — deduplicates the 4x fatigue recovery pattern.
 #[inline]
-#[allow(clippy::collapsible_if)]
 fn set_crew_fatigue(
     crews: &mut Query<(Entity, &mut Crew, &ChildOf)>,
     crew_entity_opt: Option<Entity>,
     is_mining: bool,
     dt: f32,
 ) {
-    // Nested `if let` instead of `if let ... && let ...` for MSRV <1.91 portability
-    // (`pat-if-let-chains` requires Rust 1.91 / edition 2024 let-chain).
-    if let Some(c_ent) = crew_entity_opt {
-        if let Ok((_, mut crew_mut, _)) = crews.get_mut(c_ent) {
-            crew_mut.fatigue = update_fatigue(crew_mut.fatigue, is_mining, dt);
-        }
+    // `pat-if-let-chains`: combine bindings via let-chain (MSRV 1.88+, `rust-version = "1.88"`).
+    if let Some(c_ent) = crew_entity_opt
+        && let Ok((_, mut crew_mut, _)) = crews.get_mut(c_ent)
+    {
+        crew_mut.fatigue = update_fatigue(crew_mut.fatigue, is_mining, dt);
     }
 }
 

@@ -2,6 +2,10 @@
 members = ["crates/*"]
 resolver = "2"
 
+[workspace.package]
+rust-version = "1.88"
+edition = "2024"
+
 [workspace.dependencies]
 bevy = { version = "0.19", default-features = false, features = ["bevy_asset", "bevy_state", "bevy_scene"] }
 thiserror = "2"
@@ -14,6 +18,7 @@ serde = { version = "1", features = ["derive"] }
 name = "spacegame"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 
 [dependencies]
 bevy = { workspace = true, features = ["2d", "3d", "bevy_pbr", "bevy_ui", "audio", "bevy_gltf", "bevy_feathers"] }
