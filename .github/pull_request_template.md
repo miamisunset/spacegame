@@ -26,8 +26,9 @@
 <!-- How verified: -->
 <!-- - [ ] cargo fmt -p {crate} -->
 <!-- - [ ] cargo clippy -p {crate} --all-features (0 warnings) -->
-<!-- - [ ] cargo test -p {crate} --all-features -->
+<!-- - [ ] cargo nextest run -p {crate} --all-features -->
 <!-- - [ ] Determinism hash seed 42 / invariant checks (if Sim) -->
+<!-- - [ ] grep -R "BrpExtrasPlugin\|RemoteHttpPlugin\|brp_extras\|bevy_brp" crates/*/tests (must be empty) -->
 
 ## Screenshots / Saves
 <!-- UI change: bsn! snippet + screenshot. Sim change: postcard save hash if relevant. -->
