@@ -200,7 +200,15 @@ fn context_button(label: &'static str, kind: OrderKind) -> impl Scene {
 }
 
 fn setup_ui(mut commands: Commands) {
-    commands.spawn(Camera2d);
+    // Order 1 on top of 3d camera (order 0) — fixes WARN camera order ambiguities
+    // and ensures UI renders above world and receives correct picking.
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: 1,
+            ..default()
+        },
+    ));
     // Use bsn_list! functionally per AGENTS.md — spawn both scenes as a list.
     commands.spawn_scene_list(bsn_list![overlay_scene(), context_menu_scene(Vec2::ZERO)]);
 }
@@ -344,8 +352,9 @@ fn handle_right_click_spawn_menu(
             // Immediate visibility — don't rely solely on is_changed sync
             for mut vis in &mut menu_query {
                 *vis = Visibility::Visible;
-                bevy::log::info!("   menu vis -> Visible");
+                bevy::log::info!("   menu vis -> Visible (now {:?})", *vis);
             }
+            // Verify ViewVisibility next frame via is_changed sync
         } else {
             // Empty or UI-block — close menu if open (let camera orbit handle the drag).
             bevy::log::info!(

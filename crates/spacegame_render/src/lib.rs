@@ -102,11 +102,15 @@ fn setup_scene(
         ..default()
     });
 
-    // Strategic camera — detached, looks at origin initially.
+    // Strategic camera — detached, looks at origin initially. Order 0 below UI (order 1).
     let cam = StrategicCamera::default();
     let offset = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0) * Vec3::Z * cam.distance;
     commands.spawn((
         Camera3d::default(),
+        Camera {
+            order: 0,
+            ..default()
+        },
         Transform::from_translation(cam.target + offset).looking_at(cam.target, Vec3::Y),
         cam,
     ));
