@@ -7,18 +7,10 @@
 
 use bevy::prelude::*;
 
+use crate::rng::wyrand_next;
+
 /// Deterministic respawn delay in `FixedUpdate` ticks (500 ticks ~7.8s at 64Hz).
 pub const RESPAWN_DELAY_TICKS: u64 = 500;
-
-/// Splitmix64 WyRand helper — same as `movement.rs` for determinism.
-#[inline]
-fn wyrand_next(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9e3779b97f4a7c15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-    z ^ (z >> 31)
-}
 
 /// Derive respawn ore amount deterministically from `seed` and `max_ore`.
 ///
@@ -73,6 +65,11 @@ pub struct RespawnEntry {
 }
 
 /// Deterministic tick counter incremented each `FixedUpdate`.
+///
+/// Separate from [`RespawnQueue`] so ticking (`EconomySet`) and respawn
+/// (`MiningSet`) stay in their ordered sets. `RespawnQueue` stores
+/// `respawn_tick` computed from this tick, so ordering via
+/// `FixedUpdate` chain keeps determinism.
 #[derive(Debug, Clone, PartialEq, Eq, Resource, Default)]
 pub struct SimulationTick {
     /// Current tick.
@@ -83,6 +80,7 @@ pub struct SimulationTick {
 ///
 /// Headless `Resource` — in Bevy 0.19 `Resource: Component` but we never
 /// derive `Component` on this type (hard error if both).
+/// `respawn_tick` values are derived from [`SimulationTick`] at despawn time.
 #[derive(Debug, Clone, PartialEq, Resource, Default)]
 pub struct RespawnQueue {
     /// Pending respawns.
@@ -121,8 +119,9 @@ pub(crate) fn tick_increment_system(mut tick: ResMut<SimulationTick>) {
 
 /// Despawn asteroids at `ore_remaining == 0` and push to [`RespawnQueue`].
 ///
-/// Reads `Transform` for `pos`; seed is derived from `pos` bits mixed with
-/// `tick` and `max_ore` for determinism.
+/// Reads `Transform` for `pos`; seed is derived deterministically from
+/// `pos` bits mixed with `max_ore` only (not `tick`) so the same world
+/// position always yields the same respawn amount (stable seed).
 pub(crate) fn asteroid_despawn_system(
     mut commands: Commands,
     mut queue: ResMut<RespawnQueue>,
@@ -131,8 +130,7 @@ pub(crate) fn asteroid_despawn_system(
 ) {
     for (entity, ast, tf) in &asteroids {
         if ast.ore_remaining == 0 {
-            // Derive seed deterministically from pos + max + tick.
-            // Use simple hash: mix bits with splitmix.
+            // Derive seed deterministically from pos + max only (no tick) for stable world seed.
             let mut seed_mix = 0x9e3779b97f4a7c15u64;
             seed_mix ^= tf.translation.x.to_bits() as u64;
             seed_mix =
@@ -140,7 +138,6 @@ pub(crate) fn asteroid_despawn_system(
             seed_mix =
                 seed_mix.wrapping_mul(0x94d049bb133111eb) ^ tf.translation.z.to_bits() as u64;
             seed_mix ^= (ast.max_ore as u64).wrapping_mul(0x9e3779b97f4a7c15);
-            seed_mix ^= tick.tick.wrapping_mul(0x9e3779b97f4a7c15);
             // Final mix via wyrand
             let mut s = seed_mix;
             let seed = wyrand_next(&mut s);

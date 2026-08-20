@@ -52,7 +52,9 @@ impl Crew {
     /// panic in prod).
     #[must_use]
     pub fn new(role: CrewRole, skill_mining: f32, fatigue: f32) -> Self {
-        // num-float-compare: never == on f32; clamp handles NaN as 0 after is_finite check.
+        // num-float-compare: never == on f32; clamp handles NaN/Inf as 0 after is_finite check.
+        // No debug_assert after clamp (mysterious name smell) — prod clamps gracefully,
+        // input validation is via the clamping itself (err-result-over-panic).
         let skill = if skill_mining.is_finite() {
             skill_mining.clamp(0.0, 1.0)
         } else {
@@ -63,15 +65,6 @@ impl Crew {
         } else {
             0.0
         };
-        // debug_assert for ordering invariants in debug builds; prod clamps.
-        debug_assert!(
-            (0.0..=1.0).contains(&skill),
-            "skill_mining {skill} must be in [0,1]"
-        );
-        debug_assert!(
-            (0.0..=100.0).contains(&fat),
-            "fatigue {fat} must be in [0,100]"
-        );
         Self {
             role,
             skill_mining: skill,

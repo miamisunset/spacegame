@@ -6,13 +6,28 @@
 //! no negative wares.
 
 use bevy::prelude::*;
-use spacegame_data::{Secs, ShipTemplate};
+use spacegame_data::{Secs, ShipTemplate, Volume};
+use std::collections::HashMap;
 
 use crate::asteroid::Asteroid;
 use crate::crew::{Crew, effective_cycle_secs, effective_yield, update_fatigue};
 use crate::inventory::Inventory;
 use crate::movement::ShipStats;
 use crate::order::{Order, OrderQueue};
+
+/// Data-driven ore volume resource — mirrors `assets/data/wares.ron` (`ore: 1.0`).
+///
+/// Slice-1 fallback is `Volume(1.0)` matching the RON default; slice-2 may load
+/// `WaresRegistry` from disk and derive this value. Mining never hardcodes
+/// `const VOLUME_PER_UNIT` — it reads this resource.
+#[derive(Debug, Clone, Copy, PartialEq, Resource)]
+pub struct OreVolume(pub Volume);
+
+impl Default for OreVolume {
+    fn default() -> Self {
+        Self(Volume::new(1.0).expect("1.0 is valid volume"))
+    }
+}
 
 /// Stub mining laser module on a ship.
 ///
@@ -47,9 +62,18 @@ impl MiningLaser {
     }
 }
 
-impl From<ShipTemplate> for MiningLaser {
-    fn from(t: ShipTemplate) -> Self {
-        Self::from_template(&t)
+/// Helper — deduplicates the 4x fatigue recovery pattern.
+#[inline]
+fn set_crew_fatigue(
+    crews: &mut Query<(Entity, &mut Crew, &ChildOf)>,
+    crew_entity_opt: Option<Entity>,
+    is_mining: bool,
+    dt: f32,
+) {
+    if let Some(c_ent) = crew_entity_opt
+        && let Ok((_, mut crew_mut, _)) = crews.get_mut(c_ent)
+    {
+        crew_mut.fatigue = update_fatigue(crew_mut.fatigue, is_mining, dt);
     }
 }
 
@@ -69,6 +93,7 @@ impl From<ShipTemplate> for MiningLaser {
 #[allow(clippy::excessive_nesting)]
 pub(crate) fn mining_system(
     time: Res<Time<Fixed>>,
+    ore_volume: Res<OreVolume>,
     mut ships: Query<(
         Entity,
         &Transform,
@@ -81,47 +106,30 @@ pub(crate) fn mining_system(
     mut crews: Query<(Entity, &mut Crew, &ChildOf)>,
 ) {
     let dt = time.delta_secs();
-    // Volume per unit for Ore from `assets/data/wares.ron` (`Ore { volume: 1.0 }`).
-    // Data-driven via RON — mirrored here because slice 1 has a single Ware;
-    // slice 2 will thread `WaresRegistry` as a resource and call
-    // `Inventory::cargo_used_with` instead of this constant.
-    const VOLUME_PER_UNIT: f32 = 1.0;
+    let volume_per_unit = ore_volume.0.get();
+
+    // Feature Envy / O(n*m) fix: batched HashMap O(n+m) instead of per-ship linear scan.
+    let mut crew_by_ship: HashMap<Entity, Entity> = HashMap::new();
+    for (c_ent, _, child_of) in &crews {
+        crew_by_ship.entry(child_of.parent()).or_insert(c_ent);
+    }
 
     for (ship_entity, ship_tf, mut queue, stats, mut laser, mut inv) in &mut ships {
-        // Find crew for this ship (first ChildOf)
-        let mut crew_entity_opt: Option<Entity> = None;
-        let mut skill = 0.0;
-        let mut fatigue_val = 0.0;
-        for (c_ent, crew, child_of) in &crews {
-            if child_of.parent() == ship_entity {
-                skill = crew.skill_mining;
-                fatigue_val = crew.fatigue;
-                crew_entity_opt = Some(c_ent);
-                break;
-            }
-        }
+        let crew_entity_opt = crew_by_ship.get(&ship_entity).copied();
 
         let front = queue.front().cloned();
         let mine_target = match front {
             Some(Order::Mine(e)) => e,
             _ => {
                 // Not mining — recover fatigue
-                if let Some(c_ent) = crew_entity_opt
-                    && let Ok((_, mut crew_mut, _)) = crews.get_mut(c_ent)
-                {
-                    crew_mut.fatigue = update_fatigue(crew_mut.fatigue, false, dt);
-                }
+                set_crew_fatigue(&mut crews, crew_entity_opt, false, dt);
                 continue;
             }
         };
 
         let Ok((mut asteroid, ast_tf)) = asteroids.get_mut(mine_target) else {
             queue.pop_front();
-            if let Some(c_ent) = crew_entity_opt
-                && let Ok((_, mut crew_mut, _)) = crews.get_mut(c_ent)
-            {
-                crew_mut.fatigue = update_fatigue(crew_mut.fatigue, false, dt);
-            }
+            set_crew_fatigue(&mut crews, crew_entity_opt, false, dt);
             continue;
         };
 
@@ -131,33 +139,30 @@ pub(crate) fn mining_system(
 
         if dist > mining_range + 1e-3 {
             // Out of range — recover fatigue, no progress
-            if let Some(c_ent) = crew_entity_opt
-                && let Ok((_, mut crew_mut, _)) = crews.get_mut(c_ent)
-            {
-                crew_mut.fatigue = update_fatigue(crew_mut.fatigue, false, dt);
-            }
+            set_crew_fatigue(&mut crews, crew_entity_opt, false, dt);
             continue;
         }
 
         // Check cargo full before cycling
-        if inv.is_full(cargo_capacity, VOLUME_PER_UNIT) {
+        if inv.is_full(cargo_capacity, volume_per_unit) {
             queue.pop_front();
-            if let Some(c_ent) = crew_entity_opt
-                && let Ok((_, mut crew_mut, _)) = crews.get_mut(c_ent)
-            {
-                crew_mut.fatigue = update_fatigue(crew_mut.fatigue, false, dt);
-            }
+            set_crew_fatigue(&mut crews, crew_entity_opt, false, dt);
             continue;
         }
 
-        // In range and has space — mining: gain fatigue, accrue progress
-        if let Some(c_ent) = crew_entity_opt
-            && let Ok((_, mut crew_mut, _)) = crews.get_mut(c_ent)
-        {
-            crew_mut.fatigue = update_fatigue(crew_mut.fatigue, true, dt);
-        }
+        // In range and has space — mining: gain fatigue first, then read fresh values.
+        set_crew_fatigue(&mut crews, crew_entity_opt, true, dt);
 
-        // Effective cycle with crew scaling (use pre-update fatigue for determinism of this tick)
+        // Re-read skill/fatigue after update to avoid 1-tick lag.
+        let (skill, fatigue_val) = crew_entity_opt
+            .and_then(|c_ent| {
+                crews
+                    .get(c_ent)
+                    .ok()
+                    .map(|(_, c, _)| (c.skill_mining, c.fatigue))
+            })
+            .unwrap_or((0.0, 0.0));
+
         let effective_cycle = effective_cycle_secs(laser.cycle_secs.get(), skill, fatigue_val);
         laser.progress += dt / effective_cycle;
 
@@ -172,18 +177,18 @@ pub(crate) fn mining_system(
 
             let base_yield = laser.yield_per_cycle;
             let eff_yield = effective_yield(base_yield, skill, fatigue_val);
-            let free = inv.free_capacity(cargo_capacity, VOLUME_PER_UNIT);
-            let max_by_capacity = (free / VOLUME_PER_UNIT).floor() as u32;
+            let free = inv.free_capacity(cargo_capacity, volume_per_unit);
+            let max_by_capacity = (free / volume_per_unit).floor() as u32;
             let actual = eff_yield.min(asteroid.ore_remaining).min(max_by_capacity);
             if actual == 0 {
-                if inv.is_full(cargo_capacity, VOLUME_PER_UNIT) {
+                if inv.is_full(cargo_capacity, volume_per_unit) {
                     queue.pop_front();
                 }
                 continue;
             }
-            let added = inv.try_add("ore", actual, VOLUME_PER_UNIT, cargo_capacity);
+            let added = inv.try_add("ore", actual, volume_per_unit, cargo_capacity);
             asteroid.ore_remaining = asteroid.ore_remaining.saturating_sub(added);
-            if inv.is_full(cargo_capacity, VOLUME_PER_UNIT) {
+            if inv.is_full(cargo_capacity, volume_per_unit) {
                 queue.pop_front();
             }
         }

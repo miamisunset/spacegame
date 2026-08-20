@@ -7,6 +7,12 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+/// Stable ware identifier — alias for `String` to document intent and avoid
+/// Stringly-typed APIs (`type-no-stringly`). Slice 2 may promote to
+/// `struct WareId(String)` newtype if multi-ware lookups diversify; alias
+/// keeps the diff minimal now.
+pub type WareId = String;
+
 /// Inventory component holding ware counts.
 ///
 /// Stored on `Ship` entities; `cargo_capacity` lives on [`crate::movement::ShipStats`].
@@ -14,7 +20,7 @@ use std::collections::HashMap;
 /// (from `spacegame_data::WaresRegistry`). No hardcoded volume.
 #[derive(Debug, Clone, PartialEq, Component, Default)]
 pub struct Inventory {
-    wares: HashMap<String, u32>,
+    wares: HashMap<WareId, u32>,
 }
 
 impl Inventory {
@@ -35,10 +41,9 @@ impl Inventory {
     /// Total cargo volume used: `sum(count * volume_per_unit)`.
     ///
     /// For slice 1 only Ore exists, but formula is generic. `volume_per_unit`
-    /// is the volume for the ware being queried; for multi-ware callers should
-    /// use `cargo_used_multi` or pass the ore volume (1.0) when only Ore is present.
-    /// This helper assumes single-ware volume for simplicity — caller provides
-    /// volume for the ware type being summed. For mixed wares, use `cargo_used_with`.
+    /// is the per-unit volume for the single ware present; for mixed wares
+    /// with differing volumes use [`Self::cargo_used_with`] with a per-ware
+    /// lookup. Delegates to `cargo_used_with` for the single-volume case.
     #[must_use]
     pub fn cargo_used(&self, volume_per_unit: f32) -> f32 {
         self.cargo_used_with(|_| volume_per_unit)
@@ -124,7 +129,7 @@ impl Inventory {
     }
 
     /// Iterate wares.
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &u32)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&WareId, &u32)> {
         self.wares.iter()
     }
 

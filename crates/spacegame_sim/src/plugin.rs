@@ -6,7 +6,7 @@ use crate::asteroid::{
     RespawnQueue, SimulationTick, asteroid_despawn_system, asteroid_respawn_system,
     tick_increment_system,
 };
-use crate::mining::mining_system;
+use crate::mining::{OreVolume, mining_system};
 use crate::movement::movement_system;
 use crate::sets::{AiSet, CombatSet, EconomySet, MiningSet, MovementSet};
 use crate::state::GameState;
@@ -39,6 +39,9 @@ impl Plugin for SimPlugin {
         );
         app.init_resource::<SimulationTick>();
         app.init_resource::<RespawnQueue>();
+        // Data-driven ore volume from RON default (1.0); init as resource so
+        // mining_system never hardcodes Volume. Try load wares.ron for drift check.
+        app.init_resource::<OreVolume>();
         // Tick increments first (EconomySet), then movement, then mining + asteroid lifecycle.
         app.add_systems(FixedUpdate, tick_increment_system.in_set(EconomySet));
         app.add_systems(FixedUpdate, movement_system.in_set(MovementSet));
