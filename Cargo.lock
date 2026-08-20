@@ -5074,6 +5074,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "serde",
+ "spacegame_data",
+ "spacegame_sim",
  "thiserror 2.0.20",
 ]
 
@@ -5093,6 +5095,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "serde",
+ "spacegame_data",
+ "spacegame_sim",
  "thiserror 2.0.20",
 ]
 
