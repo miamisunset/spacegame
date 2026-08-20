@@ -35,31 +35,10 @@ pub fn miner_laser() -> MiningLaser {
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic WyRand — byte-identical to `spacegame_sim::rng::wyrand_next`
+// Deterministic WyRand — single source `spacegame_sim::rng` (review: dedup)
 // ---------------------------------------------------------------------------
 
-/// Splitmix64 / WyRand step — deterministic, no `thread_rng`.
-#[inline]
-pub fn wyrand_next(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9e3779b97f4a7c15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-    z ^ (z >> 31)
-}
-
-/// Deterministic `Vec3` in `[-half_extent, half_extent]` from `seed` and `idx`.
-pub fn wyrand_vec3(seed: u64, idx: u64, half_extent: f32) -> Vec3 {
-    let mut s = seed ^ idx.wrapping_mul(0x9e3779b97f4a7c15);
-    let r1 = wyrand_next(&mut s);
-    let r2 = wyrand_next(&mut s);
-    let r3 = wyrand_next(&mut s);
-    let to_f = |r: u64| -> f32 {
-        let u = (r & 0xffffffff) as f32 / (u32::MAX as f32);
-        u * 2.0 * half_extent - half_extent
-    };
-    Vec3::new(to_f(r1), to_f(r2), to_f(r3))
-}
+pub use spacegame_sim::rng::{seeded_positions, wyrand_next, wyrand_vec3};
 
 /// Assert `pos` lies within `[-half_extent, half_extent]` on all axes.
 pub fn assert_within_system(pos: Vec3, half_extent: f32) {
