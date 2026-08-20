@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 
+use crate::movement::movement_system;
 use crate::sets::{AiSet, CombatSet, EconomySet, MiningSet, MovementSet};
 use crate::state::GameState;
 
@@ -31,6 +32,7 @@ impl Plugin for SimPlugin {
                 .chain()
                 .run_if(in_state(GameState::Simulating)),
         );
+        app.add_systems(FixedUpdate, movement_system.in_set(MovementSet));
     }
 }
 
