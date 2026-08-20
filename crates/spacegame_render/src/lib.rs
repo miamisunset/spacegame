@@ -12,7 +12,9 @@
 
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
-use spacegame_sim::{Asteroid, Crew, CrewRole, Inventory, MiningLaser, OrderQueue, ShipStats};
+use spacegame_sim::{
+    Asteroid, Crew, CrewRole, GroundPlane, Inventory, MiningLaser, OrderQueue, ShipStats,
+};
 
 /// Marker for the player ship mesh entity (also carries sim components).
 #[derive(Component, Debug, Clone, Copy)]
@@ -66,6 +68,13 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
+        // `MeshPickingPlugin` provides the ray-cast backend for `Pointer<Click>`
+        // on `Mesh3d` entities. `DefaultPlugins` (binary) already adds
+        // `DefaultPickingPlugins` (`PointerInputPlugin` + `PickingPlugin` +
+        // `InteractionPlugin`) when `bevy_picking` is enabled; `bevy_ui` adds
+        // `UiPickingPlugin` automatically. Only the mesh backend is missing
+        // without this line — without it `Pointer<Click>` never fires for 3D meshes.
+        app.add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin);
         app.init_resource::<StrategicCamera>();
         app.add_systems(Startup, setup_scene);
         // Camera runs on `Update` (render/input), never `FixedUpdate`.
@@ -152,7 +161,25 @@ fn setup_scene(
 
     commands.spawn((Crew::new(CrewRole::Miner, 0.6, 0.0), ChildOf(ship_entity)));
 
+    // Ground plane for `FlyTo Here` world-position picking. Large `Plane3d`
+    // at y=0, pickable via `MeshPickingPlugin` (`GroundPlane` marker lets
+    // the UI observer extract `HitData::position` without a `bevy_render`
+    // ray-cast). Visible as subtle floor for strategic camera reference.
+    let ground_mesh = meshes.add(Plane3d::default().mesh().size(20000.0, 20000.0));
+    let ground_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.08, 0.08, 0.12),
+        perceptual_roughness: 1.0,
+        ..default()
+    });
+    commands.spawn((
+        GroundPlane,
+        Mesh3d(ground_mesh),
+        MeshMaterial3d(ground_mat),
+        Transform::from_translation(Vec3::new(0.0, -250.0, 0.0)),
+    ));
+
     let positions = spacegame_sim::rng::seeded_positions(0x9a7b_c3d1_5e2f_8a01, 2, 5000.0);
+    let shared_asteroid_mat = asteroid_material(&mut materials);
     for pos in positions {
         let asteroid_mesh = match Sphere::new(80.0).mesh().ico(3) {
             Ok(mesh) => meshes.add(mesh),
@@ -161,12 +188,11 @@ fn setup_scene(
                 continue;
             }
         };
-        let asteroid_mat = asteroid_material(&mut materials);
         commands.spawn((
             AsteroidVisual,
             Asteroid::new(800, 1200),
             Mesh3d(asteroid_mesh),
-            MeshMaterial3d(asteroid_mat),
+            MeshMaterial3d(shared_asteroid_mat.clone()),
             Transform::from_translation(pos),
         ));
     }
@@ -174,17 +200,16 @@ fn setup_scene(
 
 /// Load `miner.ron` data-driven via `spacegame_data`.
 ///
-/// Returns `None` and logs on failure instead of panicking (`err-no-unwrap-prod`).
+/// Compile-time `include_str!` so the binary never bakes an absolute
+/// `CARGO_MANIFEST_DIR` path (which would `Io NotFound` on CI/installed
+/// binaries). Parse via [`spacegame_data::parse_ship_ron`] and log on
+/// failure instead of panicking (`err-no-unwrap-prod`).
 fn load_miner_template() -> Option<spacegame_data::ShipTemplate> {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let candidate = manifest_dir.join("../../assets/data/ships/miner.ron");
-    match spacegame_data::load_ship_file(&candidate) {
+    const MINER_RON: &str = include_str!("../../../assets/data/ships/miner.ron");
+    match spacegame_data::parse_ship_ron(MINER_RON) {
         Ok(tmpl) => Some(tmpl),
         Err(err) => {
-            bevy::log::error!(
-                "failed to load miner template {}: {err}",
-                candidate.display()
-            );
+            bevy::log::error!("failed to load miner template: {err}");
             None
         }
     }
@@ -301,6 +326,10 @@ fn ensure_asteroid_mesh_system(
     mut materials: ResMut<Assets<StandardMaterial>>,
     asteroids: Query<(Entity, &Asteroid), (Without<Mesh3d>, Without<AsteroidVisual>)>,
 ) {
+    // Create one material and reuse via `Handle::clone` — avoids per-asteroid
+    // `Assets::add` duplication flagged in review (each call allocated a new handle).
+    let has_asteroids = asteroids.iter().next().is_some();
+    let shared_mat = has_asteroids.then(|| asteroid_material(&mut materials));
     for (entity, asteroid) in &asteroids {
         let radius = 60.0 + (asteroid.max_ore as f32 / 1200.0) * 40.0;
         let mesh = match Sphere::new(radius).mesh().ico(3) {
@@ -310,7 +339,9 @@ fn ensure_asteroid_mesh_system(
                 continue;
             }
         };
-        let mat = asteroid_material(&mut materials);
+        let mat = shared_mat
+            .clone()
+            .unwrap_or_else(|| asteroid_material(&mut materials));
         commands
             .entity(entity)
             .insert((AsteroidVisual, Mesh3d(mesh), MeshMaterial3d(mat)));

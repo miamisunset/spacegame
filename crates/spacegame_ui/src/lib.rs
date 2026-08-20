@@ -13,7 +13,11 @@ use bevy::{
     prelude::*,
     scene::prelude::{bsn, bsn_list},
 };
-use spacegame_sim::{Asteroid, Order, OrderQueue};
+use spacegame_sim::{Asteroid, GroundPlane, Order, OrderQueue};
+
+// Re-export for backward compat — canonical definitions live in
+// `spacegame_sim::picking` to avoid circular `render ↔ ui` dependency.
+pub use spacegame_sim::{LastFlyToPos, SelectedAsteroid};
 
 /// Marker for the OrderQueue overlay text entity.
 #[derive(Component, Debug, Clone, Copy, Default)]
@@ -23,14 +27,6 @@ pub struct OrderQueueText;
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ContextMenuRoot;
 
-/// Last world-space click for `FlyTo Here` — set by ground picking.
-#[derive(Resource, Debug, Clone, Default)]
-pub struct LastFlyToPos(pub Option<Vec3>);
-
-/// Last asteroid selected by pointer click — used by Approach/Orbit/Mine.
-#[derive(Resource, Debug, Clone, Default)]
-pub struct SelectedAsteroid(pub Option<Entity>);
-
 /// `UiPlugin` — inline `bsn!` observers per AGENTS.md.
 pub struct UiPlugin;
 
@@ -38,8 +34,38 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastFlyToPos>();
         app.init_resource::<SelectedAsteroid>();
+        // Global picking observers — wire `Pointer<Click>` from mesh picking
+        // (requires `MeshPickingPlugin` in `spacegame_render`). Without these,
+        // `SelectedAsteroid`/`LastFlyToPos` stayed `None` and the menu fell
+        // back to non-deterministic `iter().next()`.
+        app.add_observer(on_asteroid_click);
+        app.add_observer(on_ground_click);
         app.add_systems(Startup, setup_ui);
         app.add_systems(Update, update_order_queue_overlay);
+    }
+}
+
+/// Set `SelectedAsteroid` on asteroid mesh click.
+fn on_asteroid_click(
+    click: On<Pointer<Click>>,
+    mut selected: ResMut<SelectedAsteroid>,
+    asteroids: Query<(), With<Asteroid>>,
+) {
+    if asteroids.contains(click.entity) {
+        selected.0 = Some(click.entity);
+    }
+}
+
+/// Set `LastFlyToPos` on ground-plane click via `HitData::position`.
+fn on_ground_click(
+    click: On<Pointer<Click>>,
+    mut last_pos: ResMut<LastFlyToPos>,
+    ground: Query<(), With<GroundPlane>>,
+) {
+    if ground.contains(click.entity)
+        && let Some(pos) = click.hit.position
+    {
+        last_pos.0 = Some(pos);
     }
 }
 
@@ -101,61 +127,63 @@ fn setup_ui(mut commands: Commands) {
                  mut queues: Query<&mut OrderQueue>,
                  selected: Res<SelectedAsteroid>,
                  asteroids: Query<Entity, With<Asteroid>>| {
-                    let target = selected.0.or_else(|| asteroids.iter().next());
-                    if let Some(entity) = target {
-                        for mut q in &mut queues {
-                            q.push_back(Order::Approach(entity));
-                        }
-                    }
-                }
-            )
-        ),
-        (
-            Button
-            Node {
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-            }
-            BackgroundColor(Color::srgb(0.58, 0.42, 0.18))
-            Text("Orbit")
-            TextFont
-            TextColor(Color::WHITE)
-            on(
-                |_click: On<Pointer<Click>>,
-                 mut queues: Query<&mut OrderQueue>,
-                 selected: Res<SelectedAsteroid>,
-                 asteroids: Query<Entity, With<Asteroid>>| {
-                    let target = selected.0.or_else(|| asteroids.iter().next());
-                    if let Some(entity) = target {
-                        for mut q in &mut queues {
-                            if let Ok(dist) = spacegame_data::Distance::new(1000.0) {
-                                q.push_back(Order::orbit(entity, dist));
-                            }
-                        }
-                    }
-                }
-            )
-        ),
-        (
-            Button
-            Node {
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-            }
-            BackgroundColor(Color::srgb(0.62, 0.26, 0.26))
-            Text("Mine")
-            TextFont
-            TextColor(Color::WHITE)
-            on(
-                |_click: On<Pointer<Click>>,
-                 mut queues: Query<&mut OrderQueue>,
-                 selected: Res<SelectedAsteroid>,
-                 asteroids: Query<Entity, With<Asteroid>>| {
-                    let target = selected.0.or_else(|| asteroids.iter().next());
+                     // Deterministic fallback — `iter().min()` is insertion-order
+                     // independent (reviews flagged `iter().next()` as nondeterministic).
+                     let target = selected.0.or_else(|| asteroids.iter().min());
+                     if let Some(entity) = target {
+                         for mut q in &mut queues {
+                             q.push_back(Order::Approach(entity));
+                         }
+                     }
+                 }
+             )
+         ),
+         (
+             Button
+             Node {
+                 padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                 border_radius: BorderRadius::all(Val::Px(6.0)),
+                 justify_content: JustifyContent::Center,
+                 align_items: AlignItems::Center,
+             }
+             BackgroundColor(Color::srgb(0.58, 0.42, 0.18))
+             Text("Orbit")
+             TextFont
+             TextColor(Color::WHITE)
+             on(
+                 |_click: On<Pointer<Click>>,
+                  mut queues: Query<&mut OrderQueue>,
+                  selected: Res<SelectedAsteroid>,
+                  asteroids: Query<Entity, With<Asteroid>>| {
+                     let target = selected.0.or_else(|| asteroids.iter().min());
+                     if let Some(entity) = target {
+                         for mut q in &mut queues {
+                             if let Ok(dist) = spacegame_data::Distance::new(1000.0) {
+                                 q.push_back(Order::orbit(entity, dist));
+                             }
+                         }
+                     }
+                 }
+             )
+         ),
+         (
+             Button
+             Node {
+                 padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                 border_radius: BorderRadius::all(Val::Px(6.0)),
+                 justify_content: JustifyContent::Center,
+                 align_items: AlignItems::Center,
+             }
+             BackgroundColor(Color::srgb(0.62, 0.26, 0.26))
+             Text("Mine")
+             TextFont
+             TextColor(Color::WHITE)
+             on(
+                 |_click: On<Pointer<Click>>,
+                  mut queues: Query<&mut OrderQueue>,
+                  selected: Res<SelectedAsteroid>,
+                  asteroids: Query<Entity, With<Asteroid>>| {
+                     let target = selected.0.or_else(|| asteroids.iter().min());
                     if let Some(entity) = target {
                         for mut q in &mut queues {
                             q.push_back(Order::Mine(entity));

@@ -10,6 +10,13 @@
 //! Speculative Generality is intentional: `MiningSet`/`CombatSet` and
 //! `GameState::Paused` lock the 5-set chain and gating proof now so
 //! slice-2 systems insert without reordering.
+//!
+//! Headless guarantee: `cargo nextest run -p spacegame_sim --all-features`
+//! stays headless (no `bevy_render`/`bevy_pbr`/`bevy_window`) **when this
+//! crate is built alone**. With `cargo nextest run --workspace --all-features`
+//! Cargo's feature unification enables `bevy_pbr`/`bevy_picking`/`2d`/`3d`
+//! globally via `spacegame_render` + `spacegame_ui` dependencies. The headless
+//! guarantee is "when built alone", not in a workspace build.
 
 mod asteroid;
 mod crew;
@@ -17,6 +24,7 @@ mod inventory;
 mod mining;
 mod movement;
 mod order;
+mod picking;
 mod plugin;
 pub mod rng;
 mod sets;
@@ -28,6 +36,7 @@ pub use inventory::{Inventory, WareId};
 pub use mining::{MiningLaser, OreVolume};
 pub use movement::{ARRIVAL_DISTANCE, ARRIVAL_RADIUS, ShipStats};
 pub use order::{OrbitTarget, Order, OrderQueue};
+pub use picking::{GroundPlane, LastFlyToPos, SelectedAsteroid};
 pub use plugin::SimPlugin;
 pub use sets::{AiSet, CombatSet, EconomySet, MiningSet, MovementSet};
 pub use state::GameState;
