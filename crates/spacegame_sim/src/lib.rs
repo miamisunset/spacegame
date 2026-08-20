@@ -11,11 +11,13 @@
 //! `GameState::Paused` lock the 5-set chain and gating proof now so
 //! slice-2 systems insert without reordering.
 
+mod movement;
 mod order;
 mod plugin;
 mod sets;
 mod state;
 
+pub use movement::{ARRIVAL_DISTANCE, ARRIVAL_RADIUS, ShipStats};
 pub use order::{OrbitTarget, Order, OrderQueue};
 pub use plugin::SimPlugin;
 pub use sets::{AiSet, CombatSet, EconomySet, MiningSet, MovementSet};
