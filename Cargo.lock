@@ -4820,6 +4820,10 @@ dependencies = [
  "postcard",
  "ron 0.8.1",
  "serde",
+ "spacegame_data",
+ "spacegame_render",
+ "spacegame_sim",
+ "spacegame_ui",
  "thiserror 2.0.20",
 ]
 
@@ -4849,6 +4853,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "serde",
+ "spacegame_sim",
  "thiserror 2.0.20",
 ]
 
@@ -4868,6 +4873,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "serde",
+ "spacegame_data",
+ "spacegame_sim",
  "thiserror 2.0.20",
 ]
 

@@ -21,9 +21,13 @@ edition = "2024"
 rust-version = "1.88"
 
 [dependencies]
-bevy = { workspace = true, features = ["2d", "3d", "bevy_pbr", "bevy_ui", "audio", "bevy_gltf", "bevy_feathers"] }
+bevy = { workspace = true, features = ["2d", "3d", "bevy_pbr", "bevy_ui", "audio", "bevy_gltf", "bevy_feathers", "bevy_picking"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 ron = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }
+spacegame_sim = { path = "crates/spacegame_sim" }
+spacegame_render = { path = "crates/spacegame_render" }
+spacegame_ui = { path = "crates/spacegame_ui" }
+spacegame_data = { path = "crates/spacegame_data" }
