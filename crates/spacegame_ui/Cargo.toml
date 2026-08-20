@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_ui", "bevy_feathers", "bevy_picking"] }
+bevy = { workspace = true, features = ["bevy_ui", "bevy_ui_render", "bevy_feathers", "bevy_picking", "default_font"] }
 thiserror = { workspace = true }
 serde = { workspace = true }
 spacegame_sim = { path = "../spacegame_sim" }

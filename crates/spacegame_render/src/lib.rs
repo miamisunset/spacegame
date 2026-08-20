@@ -48,7 +48,7 @@ impl Default for StrategicCamera {
         Self {
             target: Vec3::ZERO,
             yaw: 0.0,
-            pitch: -0.35, // ~ -20°
+            pitch: 0.35, // ~ +20° above horizon (was -0.35 below ground)
             distance: 3500.0,
         }
     }
@@ -127,6 +127,10 @@ fn setup_scene(
             order: 0,
             ..default()
         },
+        Projection::Perspective(PerspectiveProjection {
+            far: 20000.0,
+            ..default()
+        }),
         Transform::from_translation(cam_pos).looking_at(cam.target, Vec3::Y),
     ));
 
@@ -179,7 +183,7 @@ fn setup_scene(
         Transform::from_translation(Vec3::new(0.0, -250.0, 0.0)),
     ));
 
-    let positions = spacegame_sim::rng::seeded_positions(0x9a7b_c3d1_5e2f_8a01, 2, 5000.0);
+    let positions = spacegame_sim::rng::seeded_positions(0x9a7b_c3d1_5e2f_8a01, 2, 1500.0);
     let shared_asteroid_mat = asteroid_material(&mut materials);
     for pos in positions {
         let asteroid_mesh = match Sphere::new(80.0).mesh().ico(3) {

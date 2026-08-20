@@ -48,10 +48,13 @@ impl Plugin for UiPlugin {
         app.add_observer(on_asteroid_click);
         app.add_observer(on_ground_click);
         app.add_systems(Startup, setup_ui);
+        // `context_menu_right_click_detect` in `PreUpdate` so the
+        // `ContextMenuState` is already `Shown` before `camera_controller_system`
+        // (`Update`) checks `orbit_enabled`. Avoids one-frame orbit-before-menu race.
+        app.add_systems(PreUpdate, context_menu_right_click_detect);
         app.add_systems(
             Update,
             (
-                context_menu_right_click_detect,
                 dismiss_context_menu_on_left_click,
                 dismiss_context_menu_on_escape,
                 update_order_queue_overlay,
@@ -91,7 +94,10 @@ fn despawn_context_menu(
     state: &mut ResMut<ContextMenuState>,
 ) {
     if let Some(entity) = menu.0.take() {
-        commands.entity(entity).despawn();
+        commands
+            .entity(entity)
+            .despawn_related::<Children>()
+            .despawn();
     }
     **state = ContextMenuState::Hidden;
 }
@@ -99,6 +105,7 @@ fn despawn_context_menu(
 /// Detect right-click on asteroids via raw input + ray cast.
 ///
 /// On hit, despawns any existing menu and spawns a new one at cursor position.
+/// On miss, dismisses any existing menu so right-drag can orbit per spec.
 #[allow(clippy::too_many_arguments, clippy::excessive_nesting)]
 fn context_menu_right_click_detect(
     mut commands: Commands,
@@ -111,6 +118,7 @@ fn context_menu_right_click_detect(
     queues: Query<Entity, With<OrderQueue>>,
     selected: Res<SelectedAsteroid>,
     asteroid_entities: Query<Entity, With<Asteroid>>,
+    last_pos: Res<LastFlyToPos>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -131,15 +139,28 @@ fn context_menu_right_click_detect(
         let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) else {
             continue;
         };
-        let hit = asteroids.iter().any(|(tf, _)| {
+        // Per-asteroid radius mirrors `spacegame_render::ensure_asteroid_mesh_system`
+        // (`60 + max_ore/1200*40`), with `t >= 0` front-face check.
+        let hit = asteroids.iter().any(|(tf, asteroid)| {
             let oc = ray.origin - tf.translation;
             let dir = *ray.direction;
-            let r = 80.0;
+            let r = 60.0 + (asteroid.max_ore as f32 / 1200.0) * 40.0;
             let b = oc.dot(dir);
             let c = oc.dot(oc) - r * r;
-            b * b - c >= 0.0
+            let disc = b * b - c;
+            if disc < 0.0 {
+                return false;
+            }
+            let sqrt_d = disc.sqrt();
+            let t0 = -b - sqrt_d;
+            let t1 = -b + sqrt_d;
+            t0 >= 0.0 || t1 >= 0.0
         });
         if !hit {
+            // Right-click on empty space / ground: close menu so orbit is re-enabled.
+            if *state != ContextMenuState::Hidden {
+                despawn_context_menu(&mut commands, &mut menu, &mut state);
+            }
             continue;
         }
 
@@ -156,9 +177,12 @@ fn context_menu_right_click_detect(
                     position_type: PositionType::Absolute,
                     left: Val::Px(cursor_pos.x),
                     top: Val::Px(cursor_pos.y),
+                    display: Display::Flex,
                     flex_direction: FlexDirection::Column,
                     padding: UiRect::all(Val::Px(4.0)),
                     border_radius: BorderRadius::all(Val::Px(6.0)),
+                    width: Val::Auto,
+                    height: Val::Auto,
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.10, 0.10, 0.14, 0.88)),
@@ -168,14 +192,16 @@ fn context_menu_right_click_detect(
 
         // Spawn each button as a child with an observer that despawns the menu.
         let btn_style = || Node {
+            display: Display::Flex,
             padding: UiRect::axes(Val::Px(14.0), Val::Px(6.0)),
             justify_content: JustifyContent::FlexStart,
             align_items: AlignItems::Center,
+            width: Val::Px(140.0),
             ..default()
         };
 
         // FlyTo Here
-        let flyto_target = last_fly_to_pos(&asteroids);
+        let flyto_target = last_fly_to_pos(&last_pos, &asteroids);
         let qe = queue_entity;
         commands
             .spawn((
@@ -188,12 +214,20 @@ fn context_menu_right_click_detect(
                 ChildOf(menu_entity),
             ))
             .observe(
-                move |_click: On<Pointer<Click>>, mut queues: Query<&mut OrderQueue>| {
+                move |_click: On<Pointer<Click>>,
+                      mut commands: Commands,
+                      mut menu: ResMut<ContextMenuEntity>,
+                      mut state: ResMut<ContextMenuState>,
+                      mut queues: Query<&mut OrderQueue>| {
                     if let Some(qe) = qe
                         && let Ok(mut q) = queues.get_mut(qe)
                     {
                         q.push_back(Order::FlyTo(flyto_target));
                     }
+                    if let Some(e) = menu.0.take() {
+                        commands.entity(e).despawn_related::<Children>().despawn();
+                    }
+                    *state = ContextMenuState::Hidden;
                 },
             );
 
@@ -211,13 +245,21 @@ fn context_menu_right_click_detect(
                 ChildOf(menu_entity),
             ))
             .observe(
-                move |_click: On<Pointer<Click>>, mut queues: Query<&mut OrderQueue>| {
+                move |_click: On<Pointer<Click>>,
+                      mut commands: Commands,
+                      mut menu: ResMut<ContextMenuEntity>,
+                      mut state: ResMut<ContextMenuState>,
+                      mut queues: Query<&mut OrderQueue>| {
                     if let Some(entity) = target
                         && let Some(qe) = qe
                         && let Ok(mut q) = queues.get_mut(qe)
                     {
                         q.push_back(Order::Approach(entity));
                     }
+                    if let Some(e) = menu.0.take() {
+                        commands.entity(e).despawn_related::<Children>().despawn();
+                    }
+                    *state = ContextMenuState::Hidden;
                 },
             );
 
@@ -235,7 +277,11 @@ fn context_menu_right_click_detect(
                 ChildOf(menu_entity),
             ))
             .observe(
-                move |_click: On<Pointer<Click>>, mut queues: Query<&mut OrderQueue>| {
+                move |_click: On<Pointer<Click>>,
+                      mut commands: Commands,
+                      mut menu: ResMut<ContextMenuEntity>,
+                      mut state: ResMut<ContextMenuState>,
+                      mut queues: Query<&mut OrderQueue>| {
                     if let Some(entity) = target
                         && let Some(qe) = qe
                         && let Ok(mut q) = queues.get_mut(qe)
@@ -243,6 +289,10 @@ fn context_menu_right_click_detect(
                     {
                         q.push_back(Order::orbit(entity, dist));
                     }
+                    if let Some(e) = menu.0.take() {
+                        commands.entity(e).despawn_related::<Children>().despawn();
+                    }
+                    *state = ContextMenuState::Hidden;
                 },
             );
 
@@ -260,13 +310,21 @@ fn context_menu_right_click_detect(
                 ChildOf(menu_entity),
             ))
             .observe(
-                move |_click: On<Pointer<Click>>, mut queues: Query<&mut OrderQueue>| {
+                move |_click: On<Pointer<Click>>,
+                      mut commands: Commands,
+                      mut menu: ResMut<ContextMenuEntity>,
+                      mut state: ResMut<ContextMenuState>,
+                      mut queues: Query<&mut OrderQueue>| {
                     if let Some(entity) = target
                         && let Some(qe) = qe
                         && let Ok(mut q) = queues.get_mut(qe)
                     {
                         q.push_back(Order::Mine(entity));
                     }
+                    if let Some(e) = menu.0.take() {
+                        commands.entity(e).despawn_related::<Children>().despawn();
+                    }
+                    *state = ContextMenuState::Hidden;
                 },
             );
 
@@ -276,9 +334,14 @@ fn context_menu_right_click_detect(
     }
 }
 
-/// Fallback `LastFlyToPos` for FlyTo button — uses stored value or default.
-fn last_fly_to_pos(asteroids: &Query<(&Transform, &Asteroid), Without<Camera>>) -> Vec3 {
-    // Use the first asteroid position as a sensible default.
+/// Resolve `FlyTo` target — prefers `LastFlyToPos` (ground pick), falls back to first asteroid.
+fn last_fly_to_pos(
+    last_pos: &LastFlyToPos,
+    asteroids: &Query<(&Transform, &Asteroid), Without<Camera>>,
+) -> Vec3 {
+    if let Some(pos) = last_pos.0 {
+        return pos;
+    }
     asteroids
         .iter()
         .next()
@@ -316,8 +379,10 @@ fn dismiss_context_menu_on_escape(
 fn setup_ui(mut commands: Commands) {
     commands.spawn((
         Camera2d,
+        IsDefaultUiCamera,
         Camera {
             order: 1,
+            clear_color: ClearColorConfig::None,
             ..default()
         },
     ));
