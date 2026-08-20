@@ -21,7 +21,7 @@ edition = "2024"
 rust-version = "1.88"
 
 [dependencies]
-bevy = { workspace = true, features = ["2d", "3d", "bevy_pbr", "bevy_ui", "audio", "bevy_gltf", "bevy_feathers", "bevy_picking"] }
+bevy = { workspace = true, features = ["2d", "3d", "bevy_pbr", "bevy_ui", "audio", "bevy_gltf", "bevy_feathers", "bevy_picking", "mesh_picking"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 ron = { workspace = true }

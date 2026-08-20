@@ -29,5 +29,6 @@ pub use mining::{MiningLaser, OreVolume};
 pub use movement::{ARRIVAL_DISTANCE, ARRIVAL_RADIUS, ShipStats};
 pub use order::{OrbitTarget, Order, OrderQueue};
 pub use plugin::SimPlugin;
+pub use rng::wyrand_next;
 pub use sets::{AiSet, CombatSet, EconomySet, MiningSet, MovementSet};
 pub use state::GameState;

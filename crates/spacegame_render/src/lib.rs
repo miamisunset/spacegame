@@ -3,9 +3,13 @@
 //! Draws ship as cube and asteroids as icospheres from `Transform` sync;
 //! provides detached strategic orbit/pan/zoom camera where WASD moves
 //! camera target, not ship. All meshes are placeholder per slice 1.
+use bevy::picking::hover::HoverMap;
+use bevy::picking::pointer::PointerId;
+use bevy::picking::prelude::{MeshPickingPlugin, Pickable};
 use bevy::prelude::*;
 
 use spacegame_sim::{Asteroid, ShipStats};
+use spacegame_ui::ContextState;
 
 /// Marker for ship mesh entities (shares `ShipStats` entity).
 #[derive(Component)]
@@ -42,6 +46,11 @@ impl Default for StrategicCamera {
     }
 }
 
+/// SystemSet for camera — ordered after [`spacegame_ui::UiSet`] so
+/// context-menu visibility is settled before orbit gating (`own-borrow-over-clone`).
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct CameraSet;
+
 /// Bevy render plugin — placeholder cube ship + icosphere asteroids + strategic camera.
 ///
 /// Depends on `DefaultPlugins` for `Assets<Mesh>` / `Assets<StandardMaterial>`.
@@ -51,11 +60,12 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(MeshPickingPlugin);
         app.add_systems(Startup, setup_scene);
         // Mesh sync runs in Update after FixedUpdate so fresh Transforms are visible.
         // Use Without<Mesh3d> to backfill entities spawned before render init.
         app.add_systems(Update, (sync_ship_mesh, sync_asteroid_mesh));
-        app.add_systems(Update, strategic_camera_system);
+        app.add_systems(Update, strategic_camera_system.in_set(CameraSet));
     }
 }
 
@@ -75,6 +85,7 @@ fn setup_scene(
         Mesh3d(ground_mesh),
         MeshMaterial3d(ground_mat),
         Transform::from_translation(Vec3::ZERO),
+        Pickable::IGNORE,
     ));
 
     // Lighting — directional sun plus ambient.
@@ -118,9 +129,12 @@ fn sync_ship_mesh(
             perceptual_roughness: 0.7,
             ..default()
         });
-        commands
-            .entity(entity)
-            .insert((Mesh3d(mesh), MeshMaterial3d(material), ShipMesh));
+        commands.entity(entity).insert((
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            ShipMesh,
+            Pickable::default(),
+        ));
     }
 }
 
@@ -146,9 +160,12 @@ fn sync_asteroid_mesh(
             perceptual_roughness: 0.9,
             ..default()
         });
-        commands
-            .entity(entity)
-            .insert((Mesh3d(mesh), MeshMaterial3d(material), AsteroidMesh));
+        commands.entity(entity).insert((
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            AsteroidMesh,
+            Pickable::default(),
+        ));
     }
 }
 
@@ -157,6 +174,11 @@ fn sync_asteroid_mesh(
 /// Runs in `Update` only (never `FixedUpdate`) per AGENTS.md. WASD moves
 /// `StrategicCamera.target` on the XZ plane relative to camera yaw; ship
 /// `Transform` is never mutated here.
+///
+/// EVE-style RMB: orbit only when hovering empty space (`HoverMap` has no
+/// pickable hit) and context menu is not visible. Right-click on a pickable
+/// (asteroid/ship) opens the menu instead — see `spacegame_ui::handle_right_click_spawn_menu`.
+#[allow(clippy::too_many_arguments)]
 fn strategic_camera_system(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -164,6 +186,9 @@ fn strategic_camera_system(
     mut scroll: MessageReader<bevy::input::mouse::MouseWheel>,
     mut mouse_motion: MessageReader<bevy::input::mouse::MouseMotion>,
     mut query: Query<(&mut Transform, &mut StrategicCamera)>,
+    hover: Res<HoverMap>,
+    ctx: Res<ContextState>,
+    window_q: Query<Entity, With<Window>>,
 ) {
     let Ok((mut tf, mut cam)) = query.single_mut() else {
         return;
@@ -214,14 +239,26 @@ fn strategic_camera_system(
         cam.pitch = (cam.pitch - pitch_speed * dt).clamp(0.1, 1.45);
     }
 
-    // Mouse orbit when RMB held — drag to yaw/pitch
-    if mouse_button.pressed(MouseButton::Right) {
+    // EVE-style gating: orbit only on empty space and when menu not visible.
+    let hovering_pickable = hover
+        .get(&PointerId::Mouse)
+        .and_then(|map| {
+            let window_ent = window_q.single().ok();
+            map.iter()
+                .find(|(e, _)| Some(**e) != window_ent)
+                .map(|(e, _)| e)
+        })
+        .is_some();
+    let should_orbit =
+        mouse_button.pressed(MouseButton::Right) && !ctx.visible && !hovering_pickable;
+
+    if should_orbit {
         for ev in mouse_motion.read() {
             cam.yaw -= ev.delta.x * 0.003;
             cam.pitch = (cam.pitch - ev.delta.y * 0.003).clamp(0.1, 1.45);
         }
     } else {
-        // consume motion when not orbiting
+        // consume motion when not orbiting to avoid stale deltas
         for _ in mouse_motion.read() {}
     }
 

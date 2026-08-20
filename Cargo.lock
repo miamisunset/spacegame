@@ -4854,6 +4854,7 @@ dependencies = [
  "bevy",
  "serde",
  "spacegame_sim",
+ "spacegame_ui",
  "thiserror 2.0.20",
 ]
 

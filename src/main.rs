@@ -3,11 +3,11 @@
 use bevy::prelude::*;
 
 use spacegame_data::Distance;
-use spacegame_render::RenderPlugin;
+use spacegame_render::{CameraSet, RenderPlugin};
 use spacegame_sim::{
-    Asteroid, Crew, Inventory, MiningLaser, Order, OrderQueue, ShipStats, SimPlugin,
+    Asteroid, Crew, Inventory, MiningLaser, Order, OrderQueue, ShipStats, SimPlugin, wyrand_next,
 };
-use spacegame_ui::UiPlugin;
+use spacegame_ui::{UiPlugin, UiSet};
 
 fn main() -> anyhow::Result<()> {
     App::new()
@@ -21,19 +21,10 @@ fn main() -> anyhow::Result<()> {
         .add_plugins(SimPlugin)
         .add_plugins(RenderPlugin)
         .add_plugins(UiPlugin)
+        .configure_sets(Update, (UiSet, CameraSet).chain())
         .add_systems(Startup, spawn_slice_scene)
         .run();
     Ok(())
-}
-
-/// Deterministic WyRand — copy of `spacegame_sim::rng::wyrand_next` (pub(crate) there).
-#[inline]
-fn wyrand_next(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9e3779b97f4a7c15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-    z ^ (z >> 31)
 }
 
 fn wyrand_vec3(seed: u64, idx: u64, half_extent: f32) -> Vec3 {
