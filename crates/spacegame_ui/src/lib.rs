@@ -1,18 +1,17 @@
 //! Feathers + `bsn!` UI — keep BSN inline here.
 //!
 //! Slice 1 dev UI: detached `Camera2d` (order 1) + `bsn!`/`bsn_list!`
-//! context menu `[FlyTo Here, Approach, Orbit, Mine]` driven by
-//! `on(|e: On<Pointer<Click>>| {...})` observers and an `OrderQueue`
-//! text overlay. No `.bsn` asset loader in Bevy 0.19 — BSN is inline
-//! as `bsn!{ ... }` via `Commands::spawn_scene`.
+//! order queue text overlay. Right-click context menu is spawned
+//! imperatively at cursor position (EVE Online pattern) and despawned
+//! on action or dismiss. No `.bsn` asset loader in Bevy 0.19 — BSN is
+//! inline as `bsn!{ ... }` via `Commands::spawn_scene`.
 //!
-//! Right-click on an asteroid shows the context menu at cursor position.
-//! Left-click or Escape hides it. `Update` only; never `FixedUpdate`.
+//! `Update` only; never `FixedUpdate`.
 
 use bevy::{
     picking::events::{Click, Pointer},
     prelude::*,
-    scene::prelude::{bsn, bsn_list},
+    scene::prelude::bsn,
     window::PrimaryWindow,
 };
 use spacegame_sim::{Asteroid, ContextMenuState, GroundPlane, Order, OrderQueue};
@@ -25,9 +24,13 @@ pub use spacegame_sim::{LastFlyToPos, SelectedAsteroid};
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct OrderQueueText;
 
-/// Marker for the dev context menu root.
+/// Marker for the context menu root entity (imperatively spawned).
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ContextMenuRoot;
+
+/// Tracks the currently open context menu entity for despawn.
+#[derive(Resource, Default)]
+struct ContextMenuEntity(Option<Entity>);
 
 /// `UiPlugin` — inline `bsn!` observers per AGENTS.md.
 pub struct UiPlugin;
@@ -36,29 +39,23 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastFlyToPos>();
         app.init_resource::<SelectedAsteroid>();
-        app.init_resource::<ContextMenuState>();
+        app.init_resource::<ContextMenuEntity>();
         // Global picking observers — wire `Pointer<Click>` from mesh picking
         // (requires `MeshPickingPlugin` in `spacegame_render`). Without these,
         // `SelectedAsteroid`/`LastFlyToPos` stayed `None` and the menu fell
         // back to non-deterministic `iter().next()`.
         app.add_observer(on_asteroid_click);
         app.add_observer(on_ground_click);
-        // Right-click context menu — raw input + ray cast for reliable detection.
+        app.add_systems(Startup, setup_ui);
         app.add_systems(
             Update,
             (
-                (
-                    context_menu_right_click_detect,
-                    on_left_click_hide_menu_system,
-                ),
-                (
-                    hide_menu_on_escape,
-                    update_order_queue_overlay,
-                    update_context_menu_visibility,
-                ),
+                context_menu_right_click_detect,
+                dismiss_context_menu_on_left_click,
+                dismiss_context_menu_on_escape,
+                update_order_queue_overlay,
             ),
         );
-        app.add_systems(Startup, setup_ui);
     }
 }
 
@@ -86,17 +83,33 @@ fn on_ground_click(
     }
 }
 
+/// Despawn the current context menu entity, if any.
+fn despawn_context_menu(
+    commands: &mut Commands,
+    menu: &mut ResMut<ContextMenuEntity>,
+    state: &mut ResMut<ContextMenuState>,
+) {
+    if let Some(entity) = menu.0.take() {
+        commands.entity(entity).despawn();
+    }
+    **state = ContextMenuState::Hidden;
+}
+
 /// Detect right-click on asteroids via raw input + ray cast.
 ///
-/// Bypasses the picking pipeline entirely — reads `MouseButtonInput` events,
-/// ray-casts from the camera through the cursor, and checks sphere intersection
-/// with asteroid transforms. Shows context menu at cursor position on hit.
+/// On hit, despawns any existing menu and spawns a new one at cursor position.
+#[allow(clippy::too_many_arguments, clippy::excessive_nesting)]
 fn context_menu_right_click_detect(
+    mut commands: Commands,
     mut mouse_events: MessageReader<bevy::input::mouse::MouseButtonInput>,
     windows: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     asteroids: Query<(&Transform, &Asteroid), Without<Camera>>,
+    mut menu: ResMut<ContextMenuEntity>,
     mut state: ResMut<ContextMenuState>,
+    queues: Query<Entity, With<OrderQueue>>,
+    selected: Res<SelectedAsteroid>,
+    asteroid_entities: Query<Entity, With<Asteroid>>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -123,61 +136,182 @@ fn context_menu_right_click_detect(
             let r = 80.0;
             let b = oc.dot(dir);
             let c = oc.dot(oc) - r * r;
-            b * b - c >= 0.0 // a=1 for normalized dir, discriminant = b²-4ac = b²-4c; >=0 when b²>=c (simplified)
+            b * b - c >= 0.0
         });
-        if hit {
-            *state = ContextMenuState::Shown(cursor_pos);
-            return;
+        if !hit {
+            continue;
         }
+
+        // Despawn old menu, spawn new at cursor position (EVE Online pattern).
+        despawn_context_menu(&mut commands, &mut menu, &mut state);
+
+        let queue_entity = queues.iter().next();
+        let asteroid_entity = selected.0.or_else(|| asteroid_entities.iter().min());
+
+        let menu_entity = commands
+            .spawn((
+                ContextMenuRoot,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(cursor_pos.x),
+                    top: Val::Px(cursor_pos.y),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(Val::Px(4.0)),
+                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.10, 0.10, 0.14, 0.88)),
+                ZIndex(100),
+            ))
+            .id();
+
+        // Spawn each button as a child with an observer that despawns the menu.
+        let btn_style = || Node {
+            padding: UiRect::axes(Val::Px(14.0), Val::Px(6.0)),
+            justify_content: JustifyContent::FlexStart,
+            align_items: AlignItems::Center,
+            ..default()
+        };
+
+        // FlyTo Here
+        let flyto_target = last_fly_to_pos(&asteroids);
+        let qe = queue_entity;
+        commands
+            .spawn((
+                Button,
+                btn_style(),
+                BackgroundColor(Color::srgba(0.22, 0.32, 0.68, 0.9)),
+                Text::new("FlyTo Here"),
+                TextFont::default(),
+                TextColor(Color::WHITE),
+                ChildOf(menu_entity),
+            ))
+            .observe(
+                move |_click: On<Pointer<Click>>, mut queues: Query<&mut OrderQueue>| {
+                    if let Some(qe) = qe
+                        && let Ok(mut q) = queues.get_mut(qe)
+                    {
+                        q.push_back(Order::FlyTo(flyto_target));
+                    }
+                },
+            );
+
+        // Approach
+        let target = asteroid_entity;
+        let qe = queue_entity;
+        commands
+            .spawn((
+                Button,
+                btn_style(),
+                BackgroundColor(Color::srgba(0.26, 0.46, 0.28, 0.9)),
+                Text::new("Approach"),
+                TextFont::default(),
+                TextColor(Color::WHITE),
+                ChildOf(menu_entity),
+            ))
+            .observe(
+                move |_click: On<Pointer<Click>>, mut queues: Query<&mut OrderQueue>| {
+                    if let Some(entity) = target
+                        && let Some(qe) = qe
+                        && let Ok(mut q) = queues.get_mut(qe)
+                    {
+                        q.push_back(Order::Approach(entity));
+                    }
+                },
+            );
+
+        // Orbit
+        let target = asteroid_entity;
+        let qe = queue_entity;
+        commands
+            .spawn((
+                Button,
+                btn_style(),
+                BackgroundColor(Color::srgba(0.58, 0.42, 0.18, 0.9)),
+                Text::new("Orbit"),
+                TextFont::default(),
+                TextColor(Color::WHITE),
+                ChildOf(menu_entity),
+            ))
+            .observe(
+                move |_click: On<Pointer<Click>>, mut queues: Query<&mut OrderQueue>| {
+                    if let Some(entity) = target
+                        && let Some(qe) = qe
+                        && let Ok(mut q) = queues.get_mut(qe)
+                        && let Ok(dist) = spacegame_data::Distance::new(1000.0)
+                    {
+                        q.push_back(Order::orbit(entity, dist));
+                    }
+                },
+            );
+
+        // Mine
+        let target = asteroid_entity;
+        let qe = queue_entity;
+        commands
+            .spawn((
+                Button,
+                btn_style(),
+                BackgroundColor(Color::srgba(0.62, 0.26, 0.26, 0.9)),
+                Text::new("Mine"),
+                TextFont::default(),
+                TextColor(Color::WHITE),
+                ChildOf(menu_entity),
+            ))
+            .observe(
+                move |_click: On<Pointer<Click>>, mut queues: Query<&mut OrderQueue>| {
+                    if let Some(entity) = target
+                        && let Some(qe) = qe
+                        && let Ok(mut q) = queues.get_mut(qe)
+                    {
+                        q.push_back(Order::Mine(entity));
+                    }
+                },
+            );
+
+        menu.0 = Some(menu_entity);
+        *state = ContextMenuState::Shown(cursor_pos);
+        return;
     }
 }
 
-/// Hide context menu on left-click anywhere via raw input.
-fn on_left_click_hide_menu_system(
+/// Fallback `LastFlyToPos` for FlyTo button — uses stored value or default.
+fn last_fly_to_pos(asteroids: &Query<(&Transform, &Asteroid), Without<Camera>>) -> Vec3 {
+    // Use the first asteroid position as a sensible default.
+    asteroids
+        .iter()
+        .next()
+        .map(|(tf, _)| tf.translation)
+        .unwrap_or(Vec3::new(2000.0, 0.0, 800.0))
+}
+
+/// Dismiss context menu on left-click anywhere via raw input.
+fn dismiss_context_menu_on_left_click(
     mut mouse_events: MessageReader<bevy::input::mouse::MouseButtonInput>,
+    mut commands: Commands,
+    mut menu: ResMut<ContextMenuEntity>,
     mut state: ResMut<ContextMenuState>,
 ) {
     for ev in mouse_events.read() {
         if ev.button == MouseButton::Left && ev.state.is_pressed() {
-            *state = ContextMenuState::Hidden;
+            despawn_context_menu(&mut commands, &mut menu, &mut state);
         }
     }
 }
 
-/// Hide context menu on Escape key press (runs every frame).
-fn hide_menu_on_escape(keyboard: Res<ButtonInput<KeyCode>>, mut state: ResMut<ContextMenuState>) {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        *state = ContextMenuState::Hidden;
-    }
-}
-
-/// Sync `ContextMenuState` to the `ContextMenuRoot` entity's visibility
-/// and position. Runs each frame on `Update`.
-fn update_context_menu_visibility(
-    state: Res<ContextMenuState>,
-    mut q: Query<(&mut Visibility, &mut Node), With<ContextMenuRoot>>,
+/// Dismiss context menu on Escape key press.
+fn dismiss_context_menu_on_escape(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+    mut menu: ResMut<ContextMenuEntity>,
+    mut state: ResMut<ContextMenuState>,
 ) {
-    let Ok((mut visibility, mut node)) = q.single_mut() else {
-        return;
-    };
-    match *state {
-        ContextMenuState::Hidden => {
-            *visibility = Visibility::Hidden;
-        }
-        ContextMenuState::Shown(pos) => {
-            *visibility = Visibility::Visible;
-            // Offset by parent padding (12px) so menu appears at exact cursor position.
-            node.left = Val::Px(pos.x - 12.0);
-            node.top = Val::Px(pos.y - 12.0);
-        }
+    if keyboard.just_pressed(KeyCode::Escape) {
+        despawn_context_menu(&mut commands, &mut menu, &mut state);
     }
 }
 
-/// Spawn UI: `Camera2d` order 1 + `bsn!` overlay and context menu.
-///
-/// Uses `bsn!` + `bsn_list!` proc-macros for declarative UI (Feathers).
-/// `on(|e: On<Pointer<Click>>| {...})` inside `bsn!` wires callback-style
-/// observers; buffered `Message` not needed for discrete order issuance.
+/// Spawn UI: `Camera2d` order 1 + `bsn!` order queue overlay.
 fn setup_ui(mut commands: Commands) {
     commands.spawn((
         Camera2d,
@@ -187,133 +321,14 @@ fn setup_ui(mut commands: Commands) {
         },
     ));
 
-    // Demonstrate `bsn_list!` — button list built as a reusable `SceneList`
-    // spliced into the parent `Children` via `{buttons}` expression.
-    // This satisfies the `bsn_list!` portion of the acceptance criteria.
-    let buttons = bsn_list! {
-        (
-            Button
-            Node {
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-            }
-            BackgroundColor(Color::srgb(0.22, 0.32, 0.68))
-            Text("FlyTo Here")
-            TextFont
-            TextColor(Color::WHITE)
-            on(
-                |_click: On<Pointer<Click>>,
-                 mut queues: Query<&mut OrderQueue>,
-                 last_pos: Res<LastFlyToPos>,
-                 mut state: ResMut<ContextMenuState>| {
-                    let target = last_pos.0.unwrap_or(Vec3::new(2000.0, 0.0, 800.0));
-                    for mut q in &mut queues {
-                        q.push_back(Order::FlyTo(target));
-                    }
-                    *state = ContextMenuState::Hidden;
-                }
-            )
-        ),
-        (
-            Button
-            Node {
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-            }
-            BackgroundColor(Color::srgb(0.26, 0.46, 0.28))
-            Text("Approach")
-            TextFont
-            TextColor(Color::WHITE)
-            on(
-                |_click: On<Pointer<Click>>,
-                 mut queues: Query<&mut OrderQueue>,
-                 selected: Res<SelectedAsteroid>,
-                 asteroids: Query<Entity, With<Asteroid>>,
-                 mut state: ResMut<ContextMenuState>| {
-                    // Deterministic fallback — `iter().min()` is insertion-order
-                    // independent (reviews flagged `iter().next()` as nondeterministic).
-                    let target = selected.0.or_else(|| asteroids.iter().min());
-                    if let Some(entity) = target {
-                        for mut q in &mut queues {
-                            q.push_back(Order::Approach(entity));
-                        }
-                    }
-                    *state = ContextMenuState::Hidden;
-                }
-            )
-        ),
-        (
-            Button
-            Node {
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-            }
-            BackgroundColor(Color::srgb(0.58, 0.42, 0.18))
-            Text("Orbit")
-            TextFont
-            TextColor(Color::WHITE)
-            on(
-                |_click: On<Pointer<Click>>,
-                 mut queues: Query<&mut OrderQueue>,
-                 selected: Res<SelectedAsteroid>,
-                 asteroids: Query<Entity, With<Asteroid>>,
-                 mut state: ResMut<ContextMenuState>| {
-                    let target = selected.0.or_else(|| asteroids.iter().min());
-                    if let Some(entity) = target {
-                        for mut q in &mut queues {
-                            if let Ok(dist) = spacegame_data::Distance::new(1000.0) {
-                                q.push_back(Order::orbit(entity, dist));
-                            }
-                        }
-                    }
-                    *state = ContextMenuState::Hidden;
-                }
-            )
-        ),
-        (
-            Button
-            Node {
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-            }
-            BackgroundColor(Color::srgb(0.62, 0.26, 0.26))
-            Text("Mine")
-            TextFont
-            TextColor(Color::WHITE)
-            on(
-                |_click: On<Pointer<Click>>,
-                 mut queues: Query<&mut OrderQueue>,
-                 selected: Res<SelectedAsteroid>,
-                 asteroids: Query<Entity, With<Asteroid>>,
-                 mut state: ResMut<ContextMenuState>| {
-                    let target = selected.0.or_else(|| asteroids.iter().min());
-                    if let Some(entity) = target {
-                        for mut q in &mut queues {
-                            q.push_back(Order::Mine(entity));
-                        }
-                    }
-                    *state = ContextMenuState::Hidden;
-                }
-            )
-        )
-    };
-
-    // Context menu starts hidden — shown by `on_asteroid_right_click` observer.
+    // Order queue overlay — always visible at top-left.
     commands.spawn_scene(bsn! {
         Node {
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
             display: Display::Flex,
             flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::SpaceBetween,
+            justify_content: JustifyContent::FlexStart,
             align_items: AlignItems::FlexStart,
             padding: UiRect::all(Val::Px(12.0)),
         }
@@ -330,28 +345,11 @@ fn setup_ui(mut commands: Commands) {
                 ZIndex(100)
                 Children [
                     (
-                        Text("OrderQueue empty")
+                        Text("OrderQueue: empty - right-click an asteroid for commands")
                         TextFont
                         TextColor(Color::srgb(0.92, 0.92, 0.95))
                         OrderQueueText
                     )
-                ]
-            ),
-            (
-                Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    padding: UiRect::all(Val::Px(8.0)),
-                    position_type: PositionType::Absolute,
-                    border_radius: BorderRadius::all(Val::Px(8.0)),
-                }
-                BackgroundColor(Color::srgba(0.10, 0.10, 0.14, 0.72))
-                ZIndex(100)
-                Visibility::Hidden
-                ContextMenuRoot
-                Children [
-                    {buttons}
                 ]
             )
         ]
@@ -371,7 +369,7 @@ fn update_order_queue_overlay(
     };
 
     let summary = if queue.is_empty() {
-        "OrderQueue: empty - use [FlyTo Here, Approach, Orbit, Mine]".to_string()
+        "OrderQueue: empty - right-click an asteroid for commands".to_string()
     } else {
         let parts: Vec<String> = queue
             .iter()
