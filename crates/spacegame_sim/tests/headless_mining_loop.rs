@@ -2,7 +2,9 @@
 //!
 //! Covers GitHub issue #6 acceptance criteria:
 //! 1. WyRand-seeded Empire ship + 2 asteroids in bounded System, FIFO
-//!    `Approach→Orbit→Mine`, 5k ticks, asserts ore/cargo/orbit.
+//!    `Approach→Orbit→Mine` — ticks until Approach pops, Orbit
+//!    converges/holds, then ≥2000 mining ticks (≥5k total), asserts
+//!    ore/cargo/orbit.
 //! 2. Determinism: same seed → identical position+ore hash over 10k ticks.
 //! 3. Performance: tick cost < 0.1 ms for 1 ship + 2 asteroids, headless `MinimalPlugins`.
 
@@ -33,7 +35,7 @@ const MINER_RON: &str = r#"(
 // faction resources.
 // ---------------------------------------------------------------------------
 
-#[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[derive(Component)]
 struct Empire;
 
 // ---------------------------------------------------------------------------
@@ -72,6 +74,11 @@ fn miner_stats() -> ShipStats {
     ShipStats::from_template(&tmpl)
 }
 
+fn miner_laser() -> MiningLaser {
+    let tmpl = parse_ship_ron(MINER_RON).expect("miner ron parses");
+    MiningLaser::from_template(&tmpl)
+}
+
 fn headless_app() -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, SimPlugin));
@@ -87,13 +94,39 @@ fn tick_n(app: &mut App, n: usize) {
     }
 }
 
-/// Deterministic hash of world — sorted `Transform` bits plus `Asteroid` ore.
+/// Deterministic hash of world — paired `(Transform, Asteroid)` plus ship transforms.
 ///
-/// Uses `wrapping_add`/`wrapping_mul` per `num-overflow-explicit` and
-/// `with_capacity` per `mem-with-capacity`.
+/// Hashes `(x_bits, y_bits, z_bits, ore)` tuples for asteroids to preserve
+/// (pos, ore) pairing, plus ship `Transform`s separately. Sorted tuples make
+/// hash insertion-order independent. Uses `wrapping_add`/`wrapping_mul` per
+/// `num-overflow-explicit`.
+///
+/// Topology is fixed 1 Empire ship + 2 asteroids (slice spec); pairing via
+/// `(&Transform, &Asteroid)` query ensures ore is bound to its position.
+/// Ship transforms are hashed separately via `Without<Asteroid>` filter.
 fn world_hash(app: &mut App) -> u64 {
-    let transform_bits: Vec<(u32, u32, u32)> = {
-        let mut query = app.world_mut().query::<&Transform>();
+    // Paired asteroid data: (pos bits, ore) — preserves (pos, ore) pairing.
+    let mut asteroid_tuples: Vec<(u32, u32, u32, u32)> = {
+        let mut query = app.world_mut().query::<(&Transform, &Asteroid)>();
+        query
+            .iter(app.world())
+            .map(|(tf, ast)| {
+                (
+                    tf.translation.x.to_bits(),
+                    tf.translation.y.to_bits(),
+                    tf.translation.z.to_bits(),
+                    ast.ore_remaining,
+                )
+            })
+            .collect()
+    };
+    asteroid_tuples.sort_unstable();
+
+    // Ship transforms (non-asteroid entities) — insertion-order independent.
+    let mut ship_positions: Vec<(u32, u32, u32)> = {
+        let mut query = app
+            .world_mut()
+            .query_filtered::<&Transform, Without<Asteroid>>();
         query
             .iter(app.world())
             .map(|tf| {
@@ -105,27 +138,21 @@ fn world_hash(app: &mut App) -> u64 {
             })
             .collect()
     };
-    let ore_values: Vec<u32> = {
-        let mut query = app.world_mut().query::<&Asteroid>();
-        query.iter(app.world()).map(|a| a.ore_remaining).collect()
-    };
-
-    // Sort to make hash insertion-order independent.
-    let mut sorted_positions = transform_bits;
-    sorted_positions.sort_unstable();
-    let mut sorted_ores = ore_values;
-    sorted_ores.sort_unstable();
+    ship_positions.sort_unstable();
 
     let mut hash: u64 = 0;
-    for (x, y, z) in sorted_positions {
+    for (x, y, z, ore) in asteroid_tuples {
         hash = hash.wrapping_add(x as u64);
         hash = hash.wrapping_add(y as u64);
         hash = hash.wrapping_add(z as u64);
+        hash = hash.wrapping_add(ore as u64);
         hash = hash.wrapping_mul(0x9e3779b97f4a7c15);
         hash ^= hash >> 33;
     }
-    for ore in sorted_ores {
-        hash = hash.wrapping_add(ore as u64);
+    for (x, y, z) in ship_positions {
+        hash = hash.wrapping_add(x as u64);
+        hash = hash.wrapping_add(y as u64);
+        hash = hash.wrapping_add(z as u64);
         hash = hash.wrapping_mul(0x9e3779b97f4a7c15);
         hash ^= hash >> 33;
     }
@@ -182,7 +209,7 @@ fn headless_fifo_queue_approach_orbit_mine_preserves_order_and_orbit_persists() 
                 queue
             },
             stats.clone(),
-            MiningLaser::from_template(&parse_ship_ron(MINER_RON).expect("miner ron")),
+            miner_laser(),
             Inventory::new(),
         ))
         .id();
@@ -263,7 +290,6 @@ fn headless_mining_loop_ore_decreases_cargo_increases_and_holds_within_mining_ra
     let seed: u64 = 0x1234_5678_9abc_def0;
     let half_extent = 1200.0; // within System 10 km box, keeps approach budget low
     let asteroids: Vec<Vec3> = (0..2).map(|i| wyrand_vec3(seed, i, half_extent)).collect();
-    let expected_positions = asteroids.clone();
 
     let asteroid_a = app
         .world_mut()
@@ -280,7 +306,8 @@ fn headless_mining_loop_ore_decreases_cargo_increases_and_holds_within_mining_ra
         ))
         .id();
 
-    for pos in &expected_positions {
+    // own-borrow-over-clone: validate `asteroids` directly, no clone needed.
+    for pos in &asteroids {
         assert!(
             pos.x.abs() <= half_extent + f32::EPSILON
                 && pos.y.abs() <= half_extent + f32::EPSILON
@@ -289,8 +316,7 @@ fn headless_mining_loop_ore_decreases_cargo_increases_and_holds_within_mining_ra
         );
     }
 
-    let tmpl = parse_ship_ron(MINER_RON).expect("miner ron parses");
-    let laser = MiningLaser::from_template(&tmpl);
+    let laser = miner_laser();
 
     let ship = app
         .world_mut()
@@ -385,15 +411,18 @@ fn headless_mining_loop_ore_decreases_cargo_increases_and_holds_within_mining_ra
 
 #[test]
 fn headless_closed_loop_approach_orbit_mine_fifo_mines_over_5k_ticks() {
-    // Arrange — single closed-loop test that satisfies AC1 literally:
+    // Arrange — single closed-loop test that satisfies AC1:
     // spawn Empire ship + 2 WyRand asteroids in System (10km box),
-    // queue Approach→Orbit→Mine all at once, tick 5k total, assert mining.
+    // queue Approach→Orbit→Mine all at once, ticks until Approach pops,
+    // Orbit converges/holds, then ≥2000 mining ticks (≥5k total), assert
+    // mining.
     //
     // Because Orbit is persistent (movement_system never auto-pops Orbit),
     // the queue would deadlock at Orbit before Mine. This test drives the
     // full FIFO chain explicitly: tick until Approach pops, verify Orbit
     // holds within ±5% (per orbit_holds_range_within_5pct), then drain
-    // Orbit to reach Mine, then tick remaining to 5k and assert ore/cargo.
+    // Orbit to reach Mine, then tick ≥2000 mining ticks
+    // (budget: ticks_used + mining_ticks >= 5000) and assert ore/cargo.
     let mut app = headless_app();
     let stats = miner_stats();
     let orbit_range = stats.orbit_range.get();
@@ -419,8 +448,6 @@ fn headless_closed_loop_approach_orbit_mine_fifo_mines_over_5k_ticks() {
         ))
         .id();
 
-    let tmpl = parse_ship_ron(MINER_RON).expect("miner ron parses");
-
     let ship = app
         .world_mut()
         .spawn((
@@ -437,7 +464,7 @@ fn headless_closed_loop_approach_orbit_mine_fifo_mines_over_5k_ticks() {
                 queue
             },
             stats.clone(),
-            MiningLaser::from_template(&tmpl),
+            miner_laser(),
             Inventory::new(),
         ))
         .id();
@@ -532,10 +559,15 @@ fn headless_closed_loop_approach_orbit_mine_fifo_mines_over_5k_ticks() {
         "Mine must be front after draining Orbit"
     );
 
-    // Act — tick remaining to reach 5k total (at least 2000 more for mining).
+    // Act — tick ≥2000 mining ticks (≥5k total). Budget: `ticks_used` already
+    // counts Approach+Orbit phases; ensure mining ticks bring total to ≥5000.
+    // Cycle 5s needs ~320 ticks per cycle, give at least 2000.
     let remaining = 5000usize.saturating_sub(ticks_used);
-    // Ensure enough mining ticks: cycle 5s needs ~320 ticks per cycle, give 2000.
     let mining_ticks = remaining.max(2000);
+    assert!(
+        ticks_used + mining_ticks >= 5000,
+        "total ticks must be ≥5000: ticks_used {ticks_used} + mining_ticks {mining_ticks}"
+    );
     tick_n(&mut app, mining_ticks);
 
     // Assert — ore decreased, cargo increased, hold within mining_range.
@@ -594,7 +626,12 @@ fn headless_determinism_same_seed_yields_identical_position_and_ore_hash_over_10
         let half_extent = 2000.0;
         let positions: Vec<Vec3> = (0..2).map(|i| wyrand_vec3(seed, i, half_extent)).collect();
         for pos in &positions {
-            assert!(pos.x.abs() <= half_extent + 1e-3);
+            assert!(
+                pos.x.abs() <= half_extent + 1e-3
+                    && pos.y.abs() <= half_extent + 1e-3
+                    && pos.z.abs() <= half_extent + 1e-3,
+                "wyrand position {pos:?} must be within half_extent {half_extent}"
+            );
         }
         let asteroid_a = app
             .world_mut()
@@ -612,13 +649,12 @@ fn headless_determinism_same_seed_yields_identical_position_and_ore_hash_over_10
             .id();
         // Keep second asteroid passive (no second ship) — exactly 1 ship + 2 asteroids.
         let _ = asteroid_b;
-        let tmpl = parse_ship_ron(MINER_RON).expect("miner ron");
         app.world_mut().spawn((
             Empire,
             Transform::from_translation(Vec3::ZERO),
             OrderQueue::with_order(Order::Mine(asteroid_a)),
             stats.clone(),
-            MiningLaser::from_template(&tmpl),
+            miner_laser(),
             Inventory::new(),
         ));
         tick_n(&mut app, 10_000);
@@ -657,13 +693,12 @@ fn headless_tick_cost_below_01ms_for_one_ship_and_two_asteroids() {
             Transform::from_translation(positions[1]),
         ))
         .id();
-    let tmpl = parse_ship_ron(MINER_RON).expect("miner ron");
     app.world_mut().spawn((
         Empire,
         Transform::from_translation(Vec3::ZERO),
         OrderQueue::with_order(Order::Mine(asteroid_a)),
         stats,
-        MiningLaser::from_template(&tmpl),
+        miner_laser(),
         Inventory::new(),
     ));
     // Second asteroid is passive (no ship) — exactly 1 ship + 2 asteroids for perf budget.
