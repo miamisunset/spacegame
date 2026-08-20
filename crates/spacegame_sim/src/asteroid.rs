@@ -49,6 +49,23 @@ impl Asteroid {
             max_ore,
         }
     }
+
+    /// Visual/picking radius derived from `max_ore` — shared helper so render
+    /// mesh and UI ray-cast agree (`pick radius == render radius`, `pat-let-else` not needed).
+    ///
+    /// Formula `60 + max_ore/1200*40` gives `100` for `1200` and `86.7` for `800`.
+    #[inline]
+    #[must_use]
+    pub fn radius(&self) -> f32 {
+        Self::radius_for_max(self.max_ore)
+    }
+
+    /// Radius for a given `max_ore` without an instance.
+    #[inline]
+    #[must_use]
+    pub fn radius_for_max(max_ore: u32) -> f32 {
+        60.0 + (max_ore as f32 / 1200.0) * 40.0
+    }
 }
 
 /// Entry in the respawn queue.
