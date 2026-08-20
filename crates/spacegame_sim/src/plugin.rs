@@ -2,6 +2,11 @@
 
 use bevy::prelude::*;
 
+use crate::asteroid::{
+    RespawnQueue, SimulationTick, asteroid_despawn_system, asteroid_respawn_system,
+    tick_increment_system,
+};
+use crate::mining::mining_system;
 use crate::movement::movement_system;
 use crate::sets::{AiSet, CombatSet, EconomySet, MiningSet, MovementSet};
 use crate::state::GameState;
@@ -32,7 +37,22 @@ impl Plugin for SimPlugin {
                 .chain()
                 .run_if(in_state(GameState::Simulating)),
         );
+        app.init_resource::<SimulationTick>();
+        app.init_resource::<RespawnQueue>();
+        // Tick increments first (EconomySet), then movement, then mining + asteroid lifecycle.
+        app.add_systems(FixedUpdate, tick_increment_system.in_set(EconomySet));
         app.add_systems(FixedUpdate, movement_system.in_set(MovementSet));
+        // MiningSet: mining first, then despawn, then respawn — ordering within set via chain.
+        app.add_systems(
+            FixedUpdate,
+            (
+                mining_system,
+                asteroid_despawn_system,
+                asteroid_respawn_system,
+            )
+                .chain()
+                .in_set(MiningSet),
+        );
     }
 }
 

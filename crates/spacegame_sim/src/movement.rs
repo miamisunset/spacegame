@@ -8,7 +8,7 @@
 //! tangent — no `thread_rng`, no map iteration.
 
 use bevy::prelude::*;
-use spacegame_data::{Distance, ShipTemplate, Speed};
+use spacegame_data::{Distance, ShipTemplate, Speed, Volume};
 
 use crate::order::{OrbitTarget, Order, OrderQueue};
 
@@ -69,6 +69,8 @@ pub struct ShipStats {
     pub mining_range: Distance,
     /// Desired orbit distance from RON.
     pub orbit_range: Distance,
+    /// Cargo capacity (volume) from RON.
+    pub cargo_capacity: Volume,
 }
 
 impl ShipStats {
@@ -83,6 +85,7 @@ impl ShipStats {
         arrival_radius: Distance,
         mining_range: Distance,
         orbit_range: Distance,
+        cargo_capacity: Volume,
     ) -> Self {
         assert!(
             arrival_radius.get() < orbit_range.get(),
@@ -101,13 +104,14 @@ impl ShipStats {
             arrival_radius,
             mining_range,
             orbit_range,
+            cargo_capacity,
         }
     }
 
     /// Build from a validated [`ShipTemplate`] (RON-authored).
     ///
     /// `arrival_radius` is always [`ARRIVAL_DISTANCE`]; the template's
-    /// `orbit_range`/`mining_range`/`speed` are copied.
+    /// `orbit_range`/`mining_range`/`speed`/`cargo_capacity` are copied.
     // own-borrow-over-clone: accept &ShipTemplate to avoid moving the template
     #[must_use]
     pub fn from_template(template: &ShipTemplate) -> Self {
@@ -116,6 +120,7 @@ impl ShipStats {
             arrival_radius: ARRIVAL_DISTANCE,
             mining_range: template.mining_range,
             orbit_range: template.orbit_range,
+            cargo_capacity: template.cargo_capacity,
         };
         assert!(
             stats.arrival_radius.get() < stats.orbit_range.get(),
