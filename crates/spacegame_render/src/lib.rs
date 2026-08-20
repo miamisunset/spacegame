@@ -186,7 +186,9 @@ fn setup_scene(
     let positions = spacegame_sim::rng::seeded_positions(0x9a7b_c3d1_5e2f_8a01, 2, 1500.0);
     let shared_asteroid_mat = asteroid_material(&mut materials);
     for pos in positions {
-        let asteroid_mesh = match Sphere::new(80.0).mesh().ico(3) {
+        let asteroid = Asteroid::new(800, 1200);
+        let radius = asteroid.radius();
+        let asteroid_mesh = match Sphere::new(radius).mesh().ico(3) {
             Ok(mesh) => meshes.add(mesh),
             Err(err) => {
                 bevy::log::error!("failed to build icosphere mesh: {err}");
@@ -195,7 +197,7 @@ fn setup_scene(
         };
         commands.spawn((
             AsteroidVisual,
-            Asteroid::new(800, 1200),
+            asteroid,
             Mesh3d(asteroid_mesh),
             MeshMaterial3d(shared_asteroid_mat.clone()),
             Transform::from_translation(pos),
@@ -343,7 +345,7 @@ fn ensure_asteroid_mesh_system(
     let has_asteroids = asteroids.iter().next().is_some();
     let shared_mat = has_asteroids.then(|| asteroid_material(&mut materials));
     for (entity, asteroid) in &asteroids {
-        let radius = 60.0 + (asteroid.max_ore as f32 / 1200.0) * 40.0;
+        let radius = asteroid.radius();
         let mesh = match Sphere::new(radius).mesh().ico(3) {
             Ok(m) => meshes.add(m),
             Err(err) => {
