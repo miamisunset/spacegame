@@ -166,8 +166,9 @@ fn update_context_menu_visibility(
         }
         ContextMenuState::Shown(pos) => {
             *visibility = Visibility::Visible;
-            node.left = Val::Px(pos.x);
-            node.top = Val::Px(pos.y);
+            // Offset by parent padding (12px) so menu appears at exact cursor position.
+            node.left = Val::Px(pos.x - 12.0);
+            node.top = Val::Px(pos.y - 12.0);
         }
     }
 }
@@ -342,7 +343,7 @@ fn setup_ui(mut commands: Commands) {
                     flex_direction: FlexDirection::Row,
                     column_gap: Val::Px(8.0),
                     padding: UiRect::all(Val::Px(8.0)),
-                    align_self: AlignSelf::FlexStart,
+                    position_type: PositionType::Absolute,
                     border_radius: BorderRadius::all(Val::Px(8.0)),
                 }
                 BackgroundColor(Color::srgba(0.10, 0.10, 0.14, 0.72))
