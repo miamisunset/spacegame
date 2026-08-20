@@ -16,17 +16,11 @@ use std::time::Instant;
 
 // ---------------------------------------------------------------------------
 // Data-driven RON — single source for miner stats (Duplicated Code fix).
+// Loaded from `assets/data/ships/miner.ron` so template edits stay in one
+// place (`api-parse-dont-validate` — parse once via `miner_template()`).
 // ---------------------------------------------------------------------------
 
-const MINER_RON: &str = r#"(
-    id: "miner",
-    speed: 75.0,
-    cargo_capacity: 100.0,
-    mining_range: 1500.0,
-    cycle_secs: 5.0,
-    yield_per_cycle: 10,
-    orbit_range: 1000.0,
-)"#;
+const MINER_RON: &str = include_str!("../../../assets/data/ships/miner.ron");
 
 // ---------------------------------------------------------------------------
 // Empire marker — minimal faction tag for "Empire ship" spec wording.
@@ -69,14 +63,55 @@ fn wyrand_vec3(seed: u64, idx: u64, half_extent: f32) -> Vec3 {
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn miner_template() -> spacegame_data::ShipTemplate {
+    parse_ship_ron(MINER_RON).expect("miner ron parses")
+}
+
 fn miner_stats() -> ShipStats {
-    let tmpl = parse_ship_ron(MINER_RON).expect("miner ron parses");
-    ShipStats::from_template(&tmpl)
+    ShipStats::from_template(&miner_template())
 }
 
 fn miner_laser() -> MiningLaser {
-    let tmpl = parse_ship_ron(MINER_RON).expect("miner ron parses");
-    MiningLaser::from_template(&tmpl)
+    MiningLaser::from_template(&miner_template())
+}
+
+fn assert_within_system(pos: Vec3, half_extent: f32) {
+    assert!(
+        pos.x.abs() <= half_extent + f32::EPSILON
+            && pos.y.abs() <= half_extent + f32::EPSILON
+            && pos.z.abs() <= half_extent + f32::EPSILON,
+        "wyrand position {pos:?} must be within half_extent {half_extent} (System 10km box)"
+    );
+}
+
+fn seeded_asteroid_positions(seed: u64, half_extent: f32) -> [Vec3; 2] {
+    let positions = [
+        wyrand_vec3(seed, 0, half_extent),
+        wyrand_vec3(seed, 1, half_extent),
+    ];
+    for pos in &positions {
+        assert_within_system(*pos, half_extent);
+    }
+    positions
+}
+
+fn spawn_seeded_asteroids(app: &mut App, seed: u64, half_extent: f32) -> [Entity; 2] {
+    let positions = seeded_asteroid_positions(seed, half_extent);
+    let a = app
+        .world_mut()
+        .spawn((
+            Asteroid::new(1000, 1000),
+            Transform::from_translation(positions[0]),
+        ))
+        .id();
+    let b = app
+        .world_mut()
+        .spawn((
+            Asteroid::new(1000, 1000),
+            Transform::from_translation(positions[1]),
+        ))
+        .id();
+    [a, b]
 }
 
 fn headless_app() -> App {
@@ -174,22 +209,7 @@ fn headless_fifo_queue_approach_orbit_mine_preserves_order_and_orbit_persists() 
     // System half_extent 5000 covers the 10 km box; use smaller 2000 for
     // this FIFO test so Approach completes within 4000 ticks budget.
     let half_extent = 2000.0;
-    let asteroids: Vec<Vec3> = (0..2).map(|i| wyrand_vec3(seed, i, half_extent)).collect();
-
-    let asteroid_a = app
-        .world_mut()
-        .spawn((
-            Asteroid::new(1000, 1000),
-            Transform::from_translation(asteroids[0]),
-        ))
-        .id();
-    let _asteroid_b = app
-        .world_mut()
-        .spawn((
-            Asteroid::new(1000, 1000),
-            Transform::from_translation(asteroids[1]),
-        ))
-        .id();
+    let [asteroid_a, _asteroid_b] = spawn_seeded_asteroids(&mut app, seed, half_extent);
 
     // Ship queues Approach→Orbit→Mine (all at once) — the FIFO wording case.
     // Tagged `Empire` per spec "Empire ship".
@@ -289,32 +309,7 @@ fn headless_mining_loop_ore_decreases_cargo_increases_and_holds_within_mining_ra
     let mining_range = stats.mining_range.get();
     let seed: u64 = 0x1234_5678_9abc_def0;
     let half_extent = 1200.0; // within System 10 km box, keeps approach budget low
-    let asteroids: Vec<Vec3> = (0..2).map(|i| wyrand_vec3(seed, i, half_extent)).collect();
-
-    let asteroid_a = app
-        .world_mut()
-        .spawn((
-            Asteroid::new(1000, 1000),
-            Transform::from_translation(asteroids[0]),
-        ))
-        .id();
-    let asteroid_b = app
-        .world_mut()
-        .spawn((
-            Asteroid::new(1000, 1000),
-            Transform::from_translation(asteroids[1]),
-        ))
-        .id();
-
-    // own-borrow-over-clone: validate `asteroids` directly, no clone needed.
-    for pos in &asteroids {
-        assert!(
-            pos.x.abs() <= half_extent + f32::EPSILON
-                && pos.y.abs() <= half_extent + f32::EPSILON
-                && pos.z.abs() <= half_extent + f32::EPSILON,
-            "wyrand position {pos:?} must be within half_extent {half_extent} (System 10km box)"
-        );
-    }
+    let [asteroid_a, asteroid_b] = spawn_seeded_asteroids(&mut app, seed, half_extent);
 
     let laser = miner_laser();
 
@@ -431,20 +426,19 @@ fn headless_closed_loop_approach_orbit_mine_fifo_mines_over_5k_ticks() {
     // System box 10km side -> half_extent 5000. Use 2500 to keep Approach
     // tractable while still demonstrating System-scale seeding.
     let half_extent = 2500.0;
-    let asteroids: Vec<Vec3> = (0..2).map(|i| wyrand_vec3(seed, i, half_extent)).collect();
-
+    let positions = seeded_asteroid_positions(seed, half_extent);
     let asteroid_a = app
         .world_mut()
         .spawn((
             Asteroid::new(2000, 2000),
-            Transform::from_translation(asteroids[0]),
+            Transform::from_translation(positions[0]),
         ))
         .id();
     let asteroid_b = app
         .world_mut()
         .spawn((
             Asteroid::new(2000, 2000),
-            Transform::from_translation(asteroids[1]),
+            Transform::from_translation(positions[1]),
         ))
         .id();
 
@@ -624,29 +618,7 @@ fn headless_determinism_same_seed_yields_identical_position_and_ore_hash_over_10
         // System 10km box -> half_extent 5000, but use 2000 for determinism
         // to keep mining reachable within 10k ticks while still seeded.
         let half_extent = 2000.0;
-        let positions: Vec<Vec3> = (0..2).map(|i| wyrand_vec3(seed, i, half_extent)).collect();
-        for pos in &positions {
-            assert!(
-                pos.x.abs() <= half_extent + 1e-3
-                    && pos.y.abs() <= half_extent + 1e-3
-                    && pos.z.abs() <= half_extent + 1e-3,
-                "wyrand position {pos:?} must be within half_extent {half_extent}"
-            );
-        }
-        let asteroid_a = app
-            .world_mut()
-            .spawn((
-                Asteroid::new(1000, 1000),
-                Transform::from_translation(positions[0]),
-            ))
-            .id();
-        let asteroid_b = app
-            .world_mut()
-            .spawn((
-                Asteroid::new(1000, 1000),
-                Transform::from_translation(positions[1]),
-            ))
-            .id();
+        let [asteroid_a, asteroid_b] = spawn_seeded_asteroids(&mut app, seed, half_extent);
         // Keep second asteroid passive (no second ship) — exactly 1 ship + 2 asteroids.
         let _ = asteroid_b;
         app.world_mut().spawn((
@@ -678,21 +650,7 @@ fn headless_tick_cost_below_01ms_for_one_ship_and_two_asteroids() {
     let seed: u64 = 42;
     // Use System-scale half_extent 2500 (within 10km box) while keeping perf stable.
     let half_extent = 2500.0;
-    let positions: Vec<Vec3> = (0..2).map(|i| wyrand_vec3(seed, i, half_extent)).collect();
-    let asteroid_a = app
-        .world_mut()
-        .spawn((
-            Asteroid::new(1000, 1000),
-            Transform::from_translation(positions[0]),
-        ))
-        .id();
-    let asteroid_b = app
-        .world_mut()
-        .spawn((
-            Asteroid::new(1000, 1000),
-            Transform::from_translation(positions[1]),
-        ))
-        .id();
+    let [asteroid_a, asteroid_b] = spawn_seeded_asteroids(&mut app, seed, half_extent);
     app.world_mut().spawn((
         Empire,
         Transform::from_translation(Vec3::ZERO),
@@ -715,11 +673,13 @@ fn headless_tick_cost_below_01ms_for_one_ship_and_two_asteroids() {
     let avg_secs = elapsed.as_secs_f64() / ticks as f64;
     let avg_ms = avg_secs * 1000.0;
     let avg_micros = avg_secs * 1_000_000.0;
-    // Spec budget is <0.1 ms in release; debug builds are ~3-4x slower and
-    // `cargo test --workspace` runs binaries in parallel causing contention.
-    // Use 1 ms threshold in debug to avoid flaky CI while still proving the
-    // micro-bench is orders below the 2 ms market-tick budget (AGENTS.md).
-    // Release profile will be <0.1 ms.
+    // Perf budget: spec <0.1 ms per tick in release; debug allows 1 ms to
+    // avoid parallel-test flakes. Deviation from spec is intentional:
+    // `AGENTS.md:201` market-tick budget is 2 ms at 1k stations; 1 ship + 2
+    // asteroids must be <0.1 ms in release, but debug builds are ~3-4× slower
+    // and `cargo test --workspace` runs binaries in parallel. Spec compliance
+    // is release-only; debug threshold proves the micro-bench stays orders
+    // below the 2 ms market-tick budget.
     let threshold = if cfg!(debug_assertions) {
         0.001
     } else {
@@ -728,5 +688,143 @@ fn headless_tick_cost_below_01ms_for_one_ship_and_two_asteroids() {
     assert!(
         avg_secs < threshold,
         "tick cost {avg_secs:.6}s ({avg_ms:.3} ms, {avg_micros:.1} µs) avg over {ticks} ticks must be < {threshold:.4} s for 1 ship + 2 asteroids; elapsed {elapsed:?}"
+    );
+}
+
+#[test]
+fn headless_system_bounds_wyrand_within_10km() {
+    // 10 km bounded System — half_extent 5000 must contain every WyRand
+    // position in x&&y&&z (not just x). Uses `assert_within_system` helper
+    // and explicit x&&y&&z guard per review gap; no ship spawn needed.
+    let half_extent = 5000.0;
+    for seed in [0u64, 1, 42, 0xdead_beef_cafe_1234, u64::MAX] {
+        let positions = seeded_asteroid_positions(seed, half_extent);
+        for pos in &positions {
+            assert_within_system(*pos, half_extent);
+            assert!(
+                pos.x.abs() <= half_extent + f32::EPSILON
+                    && pos.y.abs() <= half_extent + f32::EPSILON
+                    && pos.z.abs() <= half_extent + f32::EPSILON,
+                "wyrand pos {pos:?} exceeds 10km System bounds half_extent {half_extent}"
+            );
+        }
+        // Extra indices to exercise WyRand distribution beyond the 2 asteroids.
+        for idx in 0..10u64 {
+            let pos = wyrand_vec3(seed, idx, half_extent);
+            assert_within_system(pos, half_extent);
+        }
+    }
+}
+
+#[test]
+fn headless_determinism_fifo_approach_orbit_mine_same_hash() {
+    // Full FIFO `Approach→Orbit→Mine` determinism: same seed → identical
+    // world hash after driving the whole chain (approach pops, orbit
+    // converges, drain to mine, mine). Complements the `Order::Mine`-only
+    // determinism test above and proves FIFO ordering is deterministic.
+    fn run_fifo_and_hash(seed: u64) -> u64 {
+        let mut app = headless_app();
+        let stats = miner_stats();
+        let orbit_range = stats.orbit_range.get();
+        let half_extent = 2000.0;
+        let positions = seeded_asteroid_positions(seed, half_extent);
+        let asteroid_a = app
+            .world_mut()
+            .spawn((
+                Asteroid::new(1000, 1000),
+                Transform::from_translation(positions[0]),
+            ))
+            .id();
+        let asteroid_b = app
+            .world_mut()
+            .spawn((
+                Asteroid::new(1000, 1000),
+                Transform::from_translation(positions[1]),
+            ))
+            .id();
+        let _ = asteroid_b;
+        let ship = app
+            .world_mut()
+            .spawn((
+                Empire,
+                Transform::from_translation(Vec3::ZERO),
+                {
+                    let mut queue = OrderQueue::new();
+                    queue.push_back(Order::Approach(asteroid_a));
+                    queue.push_back(Order::orbit(
+                        asteroid_a,
+                        spacegame_data::Distance::new(orbit_range).expect("valid orbit_range"),
+                    ));
+                    queue.push_back(Order::Mine(asteroid_a));
+                    queue
+                },
+                stats.clone(),
+                miner_laser(),
+                Inventory::new(),
+            ))
+            .id();
+
+        // Phase 1 — tick until Approach pops (FIFO front-only).
+        let mut ticks_used: usize = 0;
+        for _ in 0..6000 {
+            app.update();
+            ticks_used += 1;
+            let queue = app.world().get::<OrderQueue>(ship).expect("queue");
+            if !matches!(queue.front(), Some(Order::Approach(_))) {
+                break;
+            }
+        }
+
+        // Phase 2 — Orbit converge within ±5% then hold.
+        let lower = orbit_range * 0.95;
+        let upper = orbit_range * 1.05;
+        for _ in 0..5000 {
+            app.update();
+            ticks_used += 1;
+            let ship_tf = app
+                .world()
+                .get::<Transform>(ship)
+                .expect("ship tf")
+                .translation;
+            let ast_tf = app
+                .world()
+                .get::<Transform>(asteroid_a)
+                .expect("asteroid tf")
+                .translation;
+            let dist = (ship_tf - ast_tf).length();
+            if dist >= lower - 1e-3 && dist <= upper + 1e-3 {
+                break;
+            }
+        }
+        // Hold 200 ticks while Orbit remains front (persistence check).
+        for _ in 0..200 {
+            app.update();
+            ticks_used += 1;
+        }
+
+        // Phase 3 — drain persistent Orbit to reach Mine.
+        if matches!(
+            app.world().get::<OrderQueue>(ship).expect("queue").front(),
+            Some(Order::Orbit(_))
+        ) {
+            app.world_mut()
+                .get_mut::<OrderQueue>(ship)
+                .expect("queue mut")
+                .pop_front();
+        }
+
+        // Phase 4 — mine deterministically, then hash.
+        let remaining = 5000usize.saturating_sub(ticks_used);
+        let mining_ticks = remaining.max(2000);
+        tick_n(&mut app, mining_ticks);
+        world_hash(&mut app)
+    }
+
+    let seed: u64 = 0xface_b00c_dead_beef;
+    let hash_a = run_fifo_and_hash(seed);
+    let hash_b = run_fifo_and_hash(seed);
+    assert_eq!(
+        hash_a, hash_b,
+        "full FIFO Approach→Orbit→Mine must be deterministic: {hash_a:#x} vs {hash_b:#x} for seed {seed:#x}"
     );
 }
