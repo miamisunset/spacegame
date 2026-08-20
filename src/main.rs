@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use spacegame_data::Distance;
 use spacegame_render::RenderPlugin;
 use spacegame_sim::{
-    Asteroid, Crew, CrewRole, Inventory, MiningLaser, Order, OrderQueue, ShipStats, SimPlugin,
+    Asteroid, Crew, Inventory, MiningLaser, Order, OrderQueue, ShipStats, SimPlugin,
 };
 use spacegame_ui::UiPlugin;
 
@@ -51,7 +51,13 @@ fn wyrand_vec3(seed: u64, idx: u64, half_extent: f32) -> Vec3 {
 fn spawn_slice_scene(mut commands: Commands) {
     // Data-driven ship stats from RON — never hardcoded.
     let miner_ron = include_str!("../assets/data/ships/miner.ron");
-    let template = spacegame_data::parse_ship_ron(miner_ron).expect("miner.ron parses");
+    let template = match spacegame_data::parse_ship_ron(miner_ron) {
+        Ok(t) => t,
+        Err(e) => {
+            bevy::log::error!("failed to parse miner.ron: {e}");
+            return;
+        }
+    };
     let stats = ShipStats::from_template(&template);
     let laser = MiningLaser::from_template(&template);
     let orbit_range = stats.orbit_range.get();
@@ -87,8 +93,6 @@ fn spawn_slice_scene(mut commands: Commands) {
 
     // Crew child of ship — skill 0.6 miner.
     commands.spawn((Crew::miner(0.6), ChildOf(ship)));
-    // Duplicate miner role check: ensure ChildOf link.
-    let _ = CrewRole::Miner;
 
     // Queue FIFO mining run: Approach -> Orbit -> Mine on first asteroid.
     // Demonstrates EVE-like scriptable queue; Mine persists while in range.

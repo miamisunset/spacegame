@@ -3,7 +3,7 @@
 //! No .bsn asset file loader in Bevy 0.19.
 #![allow(clippy::excessive_nesting)]
 use bevy::prelude::*;
-use bevy::scene::prelude::{bsn, bsn_list};
+use bevy::scene::prelude::{CommandsSceneExt, bsn, bsn_list};
 
 use spacegame_data::Distance;
 use spacegame_sim::{Asteroid, Inventory, MiningLaser, Order, OrderQueue, ShipStats};
@@ -181,15 +181,8 @@ fn context_button(label: &'static str, kind: OrderKind) -> impl Scene {
 
 fn setup_ui(mut commands: Commands) {
     commands.spawn(Camera2d);
-    commands.spawn_scene(overlay_scene());
-    commands.spawn_scene(context_menu_scene(Vec2::ZERO));
-    // Demonstrate bsn_list! usage per spec (alongside bsn! above).
-    let _ = bsn_list![overlay_scene(), context_menu_scene(Vec2::ZERO)];
-}
-
-#[allow(dead_code)]
-fn _full_scene_demo() -> impl SceneList {
-    bsn_list![overlay_scene(), context_menu_scene(Vec2::ZERO)]
+    // Use bsn_list! functionally per AGENTS.md — spawn both scenes as a list.
+    commands.spawn_scene_list(bsn_list![overlay_scene(), context_menu_scene(Vec2::ZERO)]);
 }
 
 #[allow(clippy::too_many_arguments)]
