@@ -55,7 +55,7 @@ pub const ARRIVAL_DISTANCE: Distance = Distance(ARRIVAL_RADIUS);
 
 /// Kinematic profile for a [`Ship`] entity (CONTEXT.md: Ship is the entity).
 ///
-/// Data-driven: `speed`/`mining_range`/`orbit_range` come from
+/// Data-driven: `speed`/`mining_range`/`orbit_range`/`cargo_capacity` come from
 /// `ShipTemplate` (RON); `arrival_radius` is the fixed `ARRIVAL_DISTANCE`.
 /// `ShipStats` is a `Component`, never a `Resource` (Bevy 0.19
 /// `Resource: Component` hard error if derived both).

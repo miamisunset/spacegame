@@ -81,7 +81,10 @@ pub(crate) fn mining_system(
     mut crews: Query<(Entity, &mut Crew, &ChildOf)>,
 ) {
     let dt = time.delta_secs();
-    // Volume per unit for Ore from wares.ron
+    // Volume per unit for Ore from `assets/data/wares.ron` (`Ore { volume: 1.0 }`).
+    // Data-driven via RON — mirrored here because slice 1 has a single Ware;
+    // slice 2 will thread `WaresRegistry` as a resource and call
+    // `Inventory::cargo_used_with` instead of this constant.
     const VOLUME_PER_UNIT: f32 = 1.0;
 
     for (ship_entity, ship_tf, mut queue, stats, mut laser, mut inv) in &mut ships {
