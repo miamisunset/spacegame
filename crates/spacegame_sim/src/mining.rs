@@ -64,16 +64,19 @@ impl MiningLaser {
 
 /// Helper — deduplicates the 4x fatigue recovery pattern.
 #[inline]
+#[allow(clippy::collapsible_if)]
 fn set_crew_fatigue(
     crews: &mut Query<(Entity, &mut Crew, &ChildOf)>,
     crew_entity_opt: Option<Entity>,
     is_mining: bool,
     dt: f32,
 ) {
-    if let Some(c_ent) = crew_entity_opt
-        && let Ok((_, mut crew_mut, _)) = crews.get_mut(c_ent)
-    {
-        crew_mut.fatigue = update_fatigue(crew_mut.fatigue, is_mining, dt);
+    // Nested `if let` instead of `if let ... && let ...` for MSRV <1.91 portability
+    // (`pat-if-let-chains` requires Rust 1.91 / edition 2024 let-chain).
+    if let Some(c_ent) = crew_entity_opt {
+        if let Ok((_, mut crew_mut, _)) = crews.get_mut(c_ent) {
+            crew_mut.fatigue = update_fatigue(crew_mut.fatigue, is_mining, dt);
+        }
     }
 }
 
@@ -109,9 +112,21 @@ pub(crate) fn mining_system(
     let volume_per_unit = ore_volume.0.get();
 
     // Feature Envy / O(n*m) fix: batched HashMap O(n+m) instead of per-ship linear scan.
-    let mut crew_by_ship: HashMap<Entity, Entity> = HashMap::new();
+    // Slice-1 invariant: one Miner per ship. If a ship has multiple Crew children we
+    // keep the first silently; debug builds assert to catch spec drift when multi-crew
+    // is introduced (then sum/aggregate skills instead). Applies rule `err-expect-bugs-only`: expect for bug-only invariants.
+    // `mem-with-capacity`: pre-size map to avoid rehash at scale (thousands of ships).
+    let mut crew_by_ship: HashMap<Entity, Entity> =
+        HashMap::with_capacity(crews.iter().size_hint().0.max(8));
     for (c_ent, _, child_of) in &crews {
-        crew_by_ship.entry(child_of.parent()).or_insert(c_ent);
+        let parent = child_of.parent();
+        if crew_by_ship.contains_key(&parent) {
+            debug_assert!(
+                false,
+                "ship {parent:?} has multiple Crew — only first is used (slice-1 invariant)"
+            );
+        }
+        crew_by_ship.entry(parent).or_insert(c_ent);
     }
 
     for (ship_entity, ship_tf, mut queue, stats, mut laser, mut inv) in &mut ships {
@@ -164,16 +179,15 @@ pub(crate) fn mining_system(
             .unwrap_or((0.0, 0.0));
 
         let effective_cycle = effective_cycle_secs(laser.cycle_secs.get(), skill, fatigue_val);
+        // `num-float-compare`: never `==` on f32; use `>= 1.0` with wrapping subtraction.
+        // Invariant today: `effective_cycle >= 0.1` and `dt == 1/64 ~= 0.0156` => `dt/cycle <= 0.156`
+        // (<1 cycle per tick). SETA scales tick count, not dt, but lower `cycle_secs`
+        // or a larger `Fixed` timestep could make `dt/cycle >= 1`, so handle N cycles per tick.
         laser.progress += dt / effective_cycle;
 
-        if laser.progress >= 1.0 - f32::EPSILON {
+        // `num-saturating-clamp`: keep progress in [0,1) via wrapping subtraction.
+        while laser.progress >= 1.0 {
             laser.progress -= 1.0;
-            if laser.progress < 0.0 {
-                laser.progress = 0.0;
-            }
-            if laser.progress >= 1.0 {
-                laser.progress = laser.progress.fract();
-            }
 
             let base_yield = laser.yield_per_cycle;
             let eff_yield = effective_yield(base_yield, skill, fatigue_val);
@@ -181,16 +195,32 @@ pub(crate) fn mining_system(
             let max_by_capacity = (free / volume_per_unit).floor() as u32;
             let actual = eff_yield.min(asteroid.ore_remaining).min(max_by_capacity);
             if actual == 0 {
+                // `actual==0` means either cargo full or asteroid depleted. Cargo-full
+                // pops the order immediately; asteroid-empty is handled next tick via
+                // `asteroid_despawn_system` despawn + `Err` branch popping `Mine`.
+                // Break to avoid spinning when `dt/cycle >1` would yield multiple zero-actual cycles.
                 if inv.is_full(cargo_capacity, volume_per_unit) {
                     queue.pop_front();
                 }
-                continue;
+                break;
             }
             let added = inv.try_add("ore", actual, volume_per_unit, cargo_capacity);
             asteroid.ore_remaining = asteroid.ore_remaining.saturating_sub(added);
             if inv.is_full(cargo_capacity, volume_per_unit) {
                 queue.pop_front();
+                break;
             }
+            // If asteroid depleted mid-burst, remaining cycles would yield 0 — break early.
+            if asteroid.ore_remaining == 0 {
+                break;
+            }
+        }
+        // Clamp tiny negative epsilon from float error (defensive, `num-saturating-clamp`).
+        if laser.progress < 0.0 {
+            laser.progress = 0.0;
+        }
+        if laser.progress >= 1.0 {
+            laser.progress = laser.progress.fract();
         }
     }
 }

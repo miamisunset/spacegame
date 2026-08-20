@@ -153,10 +153,15 @@ pub(crate) fn asteroid_despawn_system(
     }
 }
 
-/// Respawn asteroids when `tick >= respawn_tick`.
+/// Respawn asteroids when `tick` has reached `respawn_tick`.
 ///
 /// Spawns `Transform` at `pos` with `Asteroid` amount derived via
-/// [`deterministic_respawn_amount`].
+/// [`deterministic_respawn_amount`]. Uses wrapping-aware comparison
+/// (`num-overflow-explicit`): `tick.wrapping_sub(respawn_tick) < 2^63` is true
+/// iff `tick` is at or past `respawn_tick` in wrapping `u64` order, so the
+/// check remains correct after `u64::MAX` wrap. Production ticks are
+/// practically bounded (`< 10k` in tests, ~2B/yr at 64 Hz), but the wrap-safe
+/// form documents the bound and avoids a latent bug.
 pub(crate) fn asteroid_respawn_system(
     mut commands: Commands,
     mut queue: ResMut<RespawnQueue>,
@@ -165,9 +170,10 @@ pub(crate) fn asteroid_respawn_system(
     let mut i = 0;
     while i < queue.queue.len() {
         let entry = queue.queue[i].clone();
-        // Simple compare — wrapping is negligible for test ticks (< 10k), and
-        // `tick` only increases. Deterministic.
-        if tick.tick >= entry.respawn_tick {
+        // `num-overflow-explicit`: wrap-aware "tick >= respawn_tick" without branch on overflow.
+        // `wrapping_sub` distance < 2^63 means tick is at/past respawn_tick.
+        let is_due = tick.tick.wrapping_sub(entry.respawn_tick) < (1u64 << 63);
+        if is_due {
             let amount = deterministic_respawn_amount(entry.seed, entry.max_ore);
             commands.spawn((
                 Asteroid::new(amount, entry.max_ore),

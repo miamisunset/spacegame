@@ -40,10 +40,13 @@ impl Inventory {
 
     /// Total cargo volume used: `sum(count * volume_per_unit)`.
     ///
-    /// For slice 1 only Ore exists, but formula is generic. `volume_per_unit`
-    /// is the per-unit volume for the single ware present; for mixed wares
-    /// with differing volumes use [`Self::cargo_used_with`] with a per-ware
-    /// lookup. Delegates to `cargo_used_with` for the single-volume case.
+    /// For slice 1 only Ore exists (volume `1.0`), but formula is generic.
+    /// `volume_per_unit` is the per-unit volume for the single ware present;
+    /// for mixed wares with differing volumes use [`Self::cargo_used_with`]
+    /// with a per-ware lookup — `cargo_used`/`free_capacity`/`try_add` must
+    /// NOT be used once heterogeneous volumes exist, because they compute
+    /// `sum(count) * volume_per_unit` (uniform assumption). Delegates to
+    /// `cargo_used_with` for the single-volume case.
     #[must_use]
     pub fn cargo_used(&self, volume_per_unit: f32) -> f32 {
         self.cargo_used_with(|_| volume_per_unit)

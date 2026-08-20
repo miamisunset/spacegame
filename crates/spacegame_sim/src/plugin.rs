@@ -39,8 +39,10 @@ impl Plugin for SimPlugin {
         );
         app.init_resource::<SimulationTick>();
         app.init_resource::<RespawnQueue>();
-        // Data-driven ore volume from RON default (1.0); init as resource so
-        // mining_system never hardcodes Volume. Try load wares.ron for drift check.
+        // Data-driven ore volume default is `Volume(1.0)` mirroring `assets/data/wares.ron`.
+        // `mining_system` reads this resource and never hardcodes volume. A runtime
+        // drift check against `WaresRegistry` (wares.ron) is deferred to slice-2
+        // when the registry is loaded; until then the default is the source of truth.
         app.init_resource::<OreVolume>();
         // Tick increments first (EconomySet), then movement, then mining + asteroid lifecycle.
         app.add_systems(FixedUpdate, tick_increment_system.in_set(EconomySet));
