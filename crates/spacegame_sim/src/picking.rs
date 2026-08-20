@@ -19,3 +19,13 @@ pub struct LastFlyToPos(pub Option<Vec3>);
 /// Marker for the ground plane entity used for `FlyTo` world-position picking.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct GroundPlane;
+
+/// Context menu state — tracks whether the right-click context menu is visible.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
+pub enum ContextMenuState {
+    /// Menu is hidden (default).
+    #[default]
+    Hidden,
+    /// Menu is visible at the given screen position.
+    Shown(Vec2),
+}

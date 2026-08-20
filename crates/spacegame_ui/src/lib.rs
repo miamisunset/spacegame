@@ -6,14 +6,14 @@
 //! text overlay. No `.bsn` asset loader in Bevy 0.19 — BSN is inline
 //! as `bsn!{ ... }` via `Commands::spawn_scene`.
 //!
-//! `Update` only; never `FixedUpdate`.
+//! Right-click on an asteroid shows the context menu at cursor position.
+//! Left-click or Escape hides it. `Update` only; never `FixedUpdate`.
 
 use bevy::{
-    picking::events::{Click, Pointer},
     prelude::*,
     scene::prelude::{bsn, bsn_list},
 };
-use spacegame_sim::{Asteroid, GroundPlane, Order, OrderQueue};
+use spacegame_sim::{Asteroid, ContextMenuState, GroundPlane, Order, OrderQueue};
 
 // Re-export for backward compat — canonical definitions live in
 // `spacegame_sim::picking` to avoid circular `render ↔ ui` dependency.
@@ -34,18 +34,29 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastFlyToPos>();
         app.init_resource::<SelectedAsteroid>();
+        app.init_resource::<ContextMenuState>();
         // Global picking observers — wire `Pointer<Click>` from mesh picking
         // (requires `MeshPickingPlugin` in `spacegame_render`). Without these,
         // `SelectedAsteroid`/`LastFlyToPos` stayed `None` and the menu fell
         // back to non-deterministic `iter().next()`.
         app.add_observer(on_asteroid_click);
         app.add_observer(on_ground_click);
+        // Right-click context menu observers.
+        app.add_observer(on_asteroid_right_click);
+        app.add_observer(on_left_click_hide_menu);
         app.add_systems(Startup, setup_ui);
-        app.add_systems(Update, update_order_queue_overlay);
+        app.add_systems(
+            Update,
+            (
+                update_order_queue_overlay,
+                update_context_menu_visibility,
+                hide_menu_on_escape,
+            ),
+        );
     }
 }
 
-/// Set `SelectedAsteroid` on asteroid mesh click.
+/// Set `SelectedAsteroid` on asteroid mesh click (any button).
 fn on_asteroid_click(
     click: On<Pointer<Click>>,
     mut selected: ResMut<SelectedAsteroid>,
@@ -66,6 +77,64 @@ fn on_ground_click(
         && let Some(pos) = click.hit.position
     {
         last_pos.0 = Some(pos);
+    }
+}
+
+/// Show context menu on right-click of an asteroid.
+///
+/// Checks `ButtonInput<MouseButton>` since `PointerButton` is not
+/// directly importable from the `bevy::picking::events` path.
+fn on_asteroid_right_click(
+    click: On<Pointer<Click>>,
+    mut state: ResMut<ContextMenuState>,
+    mouse_button: Res<ButtonInput<MouseButton>>,
+    asteroids: Query<(), With<Asteroid>>,
+) {
+    if mouse_button.pressed(MouseButton::Right) && asteroids.contains(click.entity) {
+        let pos = Vec2::new(
+            click.pointer_location.position.x,
+            click.pointer_location.position.y,
+        );
+        *state = ContextMenuState::Shown(pos);
+    }
+}
+
+/// Hide context menu on any left-click (primary button).
+fn on_left_click_hide_menu(
+    _click: On<Pointer<Click>>,
+    mut state: ResMut<ContextMenuState>,
+    mouse_button: Res<ButtonInput<MouseButton>>,
+) {
+    if mouse_button.pressed(MouseButton::Left) {
+        *state = ContextMenuState::Hidden;
+    }
+}
+
+/// Hide context menu on Escape key press (runs every frame).
+fn hide_menu_on_escape(keyboard: Res<ButtonInput<KeyCode>>, mut state: ResMut<ContextMenuState>) {
+    if keyboard.just_pressed(KeyCode::Escape) {
+        *state = ContextMenuState::Hidden;
+    }
+}
+
+/// Sync `ContextMenuState` to the `ContextMenuRoot` entity's visibility
+/// and position. Runs each frame on `Update`.
+fn update_context_menu_visibility(
+    state: Res<ContextMenuState>,
+    mut q: Query<(&mut Visibility, &mut Node), With<ContextMenuRoot>>,
+) {
+    let Ok((mut visibility, mut node)) = q.single_mut() else {
+        return;
+    };
+    match *state {
+        ContextMenuState::Hidden => {
+            *visibility = Visibility::Hidden;
+        }
+        ContextMenuState::Shown(pos) => {
+            *visibility = Visibility::Visible;
+            node.left = Val::Px(pos.x);
+            node.top = Val::Px(pos.y);
+        }
     }
 }
 
@@ -102,11 +171,13 @@ fn setup_ui(mut commands: Commands) {
             on(
                 |_click: On<Pointer<Click>>,
                  mut queues: Query<&mut OrderQueue>,
-                 last_pos: Res<LastFlyToPos>| {
+                 last_pos: Res<LastFlyToPos>,
+                 mut state: ResMut<ContextMenuState>| {
                     let target = last_pos.0.unwrap_or(Vec3::new(2000.0, 0.0, 800.0));
                     for mut q in &mut queues {
                         q.push_back(Order::FlyTo(target));
                     }
+                    *state = ContextMenuState::Hidden;
                 }
             )
         ),
@@ -126,74 +197,81 @@ fn setup_ui(mut commands: Commands) {
                 |_click: On<Pointer<Click>>,
                  mut queues: Query<&mut OrderQueue>,
                  selected: Res<SelectedAsteroid>,
-                 asteroids: Query<Entity, With<Asteroid>>| {
-                     // Deterministic fallback — `iter().min()` is insertion-order
-                     // independent (reviews flagged `iter().next()` as nondeterministic).
-                     let target = selected.0.or_else(|| asteroids.iter().min());
-                     if let Some(entity) = target {
-                         for mut q in &mut queues {
-                             q.push_back(Order::Approach(entity));
-                         }
-                     }
-                 }
-             )
-         ),
-         (
-             Button
-             Node {
-                 padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                 border_radius: BorderRadius::all(Val::Px(6.0)),
-                 justify_content: JustifyContent::Center,
-                 align_items: AlignItems::Center,
-             }
-             BackgroundColor(Color::srgb(0.58, 0.42, 0.18))
-             Text("Orbit")
-             TextFont
-             TextColor(Color::WHITE)
-             on(
-                 |_click: On<Pointer<Click>>,
-                  mut queues: Query<&mut OrderQueue>,
-                  selected: Res<SelectedAsteroid>,
-                  asteroids: Query<Entity, With<Asteroid>>| {
-                     let target = selected.0.or_else(|| asteroids.iter().min());
-                     if let Some(entity) = target {
-                         for mut q in &mut queues {
-                             if let Ok(dist) = spacegame_data::Distance::new(1000.0) {
-                                 q.push_back(Order::orbit(entity, dist));
-                             }
-                         }
-                     }
-                 }
-             )
-         ),
-         (
-             Button
-             Node {
-                 padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                 border_radius: BorderRadius::all(Val::Px(6.0)),
-                 justify_content: JustifyContent::Center,
-                 align_items: AlignItems::Center,
-             }
-             BackgroundColor(Color::srgb(0.62, 0.26, 0.26))
-             Text("Mine")
-             TextFont
-             TextColor(Color::WHITE)
-             on(
-                 |_click: On<Pointer<Click>>,
-                  mut queues: Query<&mut OrderQueue>,
-                  selected: Res<SelectedAsteroid>,
-                  asteroids: Query<Entity, With<Asteroid>>| {
-                     let target = selected.0.or_else(|| asteroids.iter().min());
+                 asteroids: Query<Entity, With<Asteroid>>,
+                 mut state: ResMut<ContextMenuState>| {
+                    // Deterministic fallback — `iter().min()` is insertion-order
+                    // independent (reviews flagged `iter().next()` as nondeterministic).
+                    let target = selected.0.or_else(|| asteroids.iter().min());
+                    if let Some(entity) = target {
+                        for mut q in &mut queues {
+                            q.push_back(Order::Approach(entity));
+                        }
+                    }
+                    *state = ContextMenuState::Hidden;
+                }
+            )
+        ),
+        (
+            Button
+            Node {
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+            }
+            BackgroundColor(Color::srgb(0.58, 0.42, 0.18))
+            Text("Orbit")
+            TextFont
+            TextColor(Color::WHITE)
+            on(
+                |_click: On<Pointer<Click>>,
+                 mut queues: Query<&mut OrderQueue>,
+                 selected: Res<SelectedAsteroid>,
+                 asteroids: Query<Entity, With<Asteroid>>,
+                 mut state: ResMut<ContextMenuState>| {
+                    let target = selected.0.or_else(|| asteroids.iter().min());
+                    if let Some(entity) = target {
+                        for mut q in &mut queues {
+                            if let Ok(dist) = spacegame_data::Distance::new(1000.0) {
+                                q.push_back(Order::orbit(entity, dist));
+                            }
+                        }
+                    }
+                    *state = ContextMenuState::Hidden;
+                }
+            )
+        ),
+        (
+            Button
+            Node {
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+            }
+            BackgroundColor(Color::srgb(0.62, 0.26, 0.26))
+            Text("Mine")
+            TextFont
+            TextColor(Color::WHITE)
+            on(
+                |_click: On<Pointer<Click>>,
+                 mut queues: Query<&mut OrderQueue>,
+                 selected: Res<SelectedAsteroid>,
+                 asteroids: Query<Entity, With<Asteroid>>,
+                 mut state: ResMut<ContextMenuState>| {
+                    let target = selected.0.or_else(|| asteroids.iter().min());
                     if let Some(entity) = target {
                         for mut q in &mut queues {
                             q.push_back(Order::Mine(entity));
                         }
                     }
+                    *state = ContextMenuState::Hidden;
                 }
             )
         )
     };
 
+    // Context menu starts hidden — shown by `on_asteroid_right_click` observer.
     commands.spawn_scene(bsn! {
         Node {
             width: Val::Percent(100.0),
@@ -235,6 +313,7 @@ fn setup_ui(mut commands: Commands) {
                 }
                 BackgroundColor(Color::srgba(0.10, 0.10, 0.14, 0.72))
                 ZIndex(100)
+                Visibility::Hidden
                 ContextMenuRoot
                 Children [
                     {buttons}

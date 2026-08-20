@@ -13,7 +13,8 @@
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use spacegame_sim::{
-    Asteroid, Crew, CrewRole, GroundPlane, Inventory, MiningLaser, OrderQueue, ShipStats,
+    Asteroid, ContextMenuState, Crew, CrewRole, GroundPlane, Inventory, MiningLaser, OrderQueue,
+    ShipStats,
 };
 
 /// Marker for the player ship mesh entity (also carries sim components).
@@ -232,6 +233,7 @@ fn camera_position(cam: &StrategicCamera) -> Vec3 {
 /// `Q`/`E` move vertically, scroll zooms `distance`, right-drag orbits
 /// `yaw`/`pitch`. Pan via middle-drag, zoom via wheel — all on `Update`,
 /// never `FixedUpdate`, and never moves the ship.
+#[allow(clippy::too_many_arguments)]
 fn camera_controller_system(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -240,6 +242,7 @@ fn camera_controller_system(
     mut mouse_wheel: MessageReader<MouseWheel>,
     mut cam: ResMut<StrategicCamera>,
     mut camera_q: Query<&mut Transform, With<Camera3d>>,
+    context_menu: Res<ContextMenuState>,
 ) {
     let dt = time.delta_secs();
     let move_speed = (cam.distance * 0.0006 + 120.0) * dt * 60.0;
@@ -289,8 +292,11 @@ fn camera_controller_system(
     let mut yaw_delta: f32 = 0.0;
     let mut pitch_delta: f32 = 0.0;
     let mut pan_delta = Vec2::ZERO;
+    // Skip right-drag orbit when context menu is visible — right-click
+    // opens the menu, not the camera. Menu hides on left-click/Escape.
+    let orbit_enabled = *context_menu == ContextMenuState::Hidden;
     for ev in mouse_motion.read() {
-        if mouse_button.pressed(MouseButton::Right) {
+        if orbit_enabled && mouse_button.pressed(MouseButton::Right) {
             yaw_delta -= ev.delta.x * 0.003;
             pitch_delta -= ev.delta.y * 0.003;
         } else if mouse_button.pressed(MouseButton::Middle) {

@@ -36,7 +36,7 @@ pub use inventory::{Inventory, WareId};
 pub use mining::{MiningLaser, OreVolume};
 pub use movement::{ARRIVAL_DISTANCE, ARRIVAL_RADIUS, ShipStats};
 pub use order::{OrbitTarget, Order, OrderQueue};
-pub use picking::{GroundPlane, LastFlyToPos, SelectedAsteroid};
+pub use picking::{ContextMenuState, GroundPlane, LastFlyToPos, SelectedAsteroid};
 pub use plugin::SimPlugin;
 pub use sets::{AiSet, CombatSet, EconomySet, MiningSet, MovementSet};
 pub use state::GameState;
