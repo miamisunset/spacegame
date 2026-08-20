@@ -39,6 +39,7 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastFlyToPos>();
         app.init_resource::<SelectedAsteroid>();
+        app.init_resource::<ContextMenuState>();
         app.init_resource::<ContextMenuEntity>();
         // Global picking observers — wire `Pointer<Click>` from mesh picking
         // (requires `MeshPickingPlugin` in `spacegame_render`). Without these,

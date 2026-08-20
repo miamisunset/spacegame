@@ -242,7 +242,7 @@ fn camera_controller_system(
     mut mouse_wheel: MessageReader<MouseWheel>,
     mut cam: ResMut<StrategicCamera>,
     mut camera_q: Query<&mut Transform, With<Camera3d>>,
-    context_menu: Res<ContextMenuState>,
+    context_menu: Option<Res<ContextMenuState>>,
 ) {
     let dt = time.delta_secs();
     let move_speed = (cam.distance * 0.0006 + 120.0) * dt * 60.0;
@@ -294,7 +294,9 @@ fn camera_controller_system(
     let mut pan_delta = Vec2::ZERO;
     // Skip right-drag orbit when context menu is visible — right-click
     // opens the menu, not the camera. Menu hides on left-click/Escape.
-    let orbit_enabled = *context_menu == ContextMenuState::Hidden;
+    let orbit_enabled = context_menu
+        .as_ref()
+        .is_none_or(|s| **s == ContextMenuState::Hidden);
     for ev in mouse_motion.read() {
         if orbit_enabled && mouse_button.pressed(MouseButton::Right) {
             yaw_delta -= ev.delta.x * 0.003;
