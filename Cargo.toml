@@ -8,6 +8,7 @@ edition = "2024"
 
 [workspace.dependencies]
 bevy = { version = "0.19", default-features = false, features = ["bevy_asset", "bevy_state", "bevy_scene"] }
+bevy_brp_extras = "0.22.3" # default features `ui` + `diagnostics` per spec (Bevy 0.19 row)
 thiserror = "2"
 anyhow = "1"
 ron = "0.8"
@@ -21,9 +22,18 @@ edition = "2024"
 rust-version = "1.88"
 
 [dependencies]
-bevy = { workspace = true, features = ["2d", "3d", "bevy_pbr", "bevy_ui", "audio", "bevy_gltf", "bevy_feathers"] }
+bevy = { workspace = true, features = ["2d", "3d", "bevy_pbr", "bevy_ui", "audio", "bevy_gltf", "bevy_feathers", "png"] }
+bevy_brp_extras = { workspace = true, optional = true }
+spacegame_sim = { path = "crates/spacegame_sim" }
+spacegame_render = { path = "crates/spacegame_render" }
+spacegame_ui = { path = "crates/spacegame_ui" }
+spacegame_data = { path = "crates/spacegame_data" }
+spacegame_persist = { path = "crates/spacegame_persist" }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 ron = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }
+
+[features]
+brp = ["bevy_brp_extras", "bevy/png"]

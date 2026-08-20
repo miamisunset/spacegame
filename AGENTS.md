@@ -10,6 +10,8 @@ Single-player space sim — a cross between **EVE Online** (deep player-driven e
 
 Always check if there is an MCP tool or skill available before performing operations manually, deploying resources, setting up a new crate, generating code, and other common workflows.
 
+**BRP / MCP (dev-only troubleshooting):** `bevy_brp_extras` is a dev-only, opt-in troubleshooting terminal. Only use the `brp` subagent (`brp_list_agent_tools` / `brp_execute`, `brp_extras/screenshot`, `click_mouse`, `send_keys`) after the app is running via `cargo run --features brp` (HTTP 15702, env `BRP_EXTRAS_PORT` overrides). Never use `BRP`/`MCP` from `crates/*/tests` — integration tests inspect `World` directly (`app.world().get::<T>()`, `query::<(&Transform,&Asteroid)>`). CI enforces this with `grep -R "BrpExtrasPlugin\|RemoteHttpPlugin\|brp_extras\|bevy_brp" crates/*/tests`.
+
 **PR Content Rule:** When creating pull requests via the MCP tool, the PR body **must** list the exact files modified and any relevant Bevy system dependencies impacted (schedules / `SystemSet`s / `FixedUpdate` vs `Update`). If the PR is related to an issue, reference it using `Closes #<issue-number>` in the PR body.
 
 ## Recommended Actions
@@ -68,6 +70,7 @@ Single crate today (`spacegame` at workspace root, `src/main.rs`), migrating to 
 spacegame/                          # Cargo workspace root
 ├── Cargo.toml                      # [workspace] + [workspace.dependencies]
 ├── AGENTS.md
+├── .config/nextest.toml            # nextest profiles [profile.default] / [profile.ci]
 ├── assets/                         # Bevy AssetServer root (see Asset Layout)
 │   ├── data/                       # RON templates (ships, stations, wares, factions)
 │   ├── textures/                   # ktx2/png atlases, ship/station textures, ui/icons
@@ -76,19 +79,22 @@ spacegame/                          # Cargo workspace root
 │   └── ui/                         # reserved; BSN UI kept inline in crates/ui until .bsn loader ships
 ├── crates/
 │   ├── spacegame_sim/              # deterministic headless sim — no bevy_render/bevy_pbr dep
+│   │   └── tests/
+│   │       ├── common/mod.rs       # shared headless harness (headless_app, world_hash, etc.)
+│   │       └── headless_mining_loop.rs
 │   ├── spacegame_render/           # Bevy render plugins, meshes, materials, lighting
 │   ├── spacegame_ui/               # Feathers + bsn! UI (Button, Inventory, Map)
 │   ├── spacegame_persist/          # save/load (postcard + DynamicWorld)
 │   └── spacegame_data/             # typed RON loaders + registries
 └── src/
-    └── main.rs                     # thin binary: anyhow at the edge, DefaultPlugins + Sim/Ui plugins
+    └── main.rs                     # thin binary: anyhow at the edge, DefaultPlugins + Sim/Ui plugins, optional BrpExtrasPlugin
 ```
 
 Rules:
 
-- `spacegame_sim` must `cargo test -p spacegame_sim` **without** render features (`default-features = false`).
+- `spacegame_sim` must `cargo nextest run -p spacegame_sim --all-features` **without** render features (`default-features = false`, `bevy = { features = ["bevy_asset","bevy_state","bevy_scene"] }`).
 - `spacegame_data` owns `thiserror` typed parse errors for RON; `spacegame_persist` owns save versioning.
-- Workspace `Cargo.toml` is the only place to add `bevy` / `thiserror` / `ron` / `postcard` / `serde` versions.
+- Workspace `Cargo.toml` is the only place to add `bevy` / `bevy_brp_extras` / `thiserror` / `ron` / `postcard` / `serde` versions. `bevy_brp_extras = "0.22.3"` is pinned there (Bevy 0.19 row). Only `spacegame` binary opts into `bevy` `png` and `bevy_brp_extras` via `[features] brp = ["bevy_brp_extras","bevy/png"]` — no other crate enables `png`/`brp`.
 
 ## Asset Layout
 
@@ -113,7 +119,7 @@ Rules:
 
 - **Math:** Utilize `glam` via Bevy (`bevy::prelude::*` / `bevy_math`, `pub use glam::*`, version 0.32 — e.g. `Vec2`, `Vec3`, `Quat`, `Mat4`). Avoid custom math types.
 
-- **Cargo Features (0.19):** `bevy` features are now granular — `audio` is **not** implied by `2d`/`3d`/`ui`, `ui` not implied by `2d`/`3d`, `bevy_picking` no longer pulls `bevy_input_focus`, `bevy_window`/`custom_cursor` moved to alternate collections, `bevy_material` split from `bevy_pbr`, `bevy_light` owns `Skybox`/`Atmosphere`. Headless `spacegame_sim` must be `bevy = { version = "0.19", default-features = false, features = ["bevy_asset","bevy_state","bevy_scene"] }` (add `multi-threaded` as needed); client/binary adds `["2d","3d","bevy_pbr","bevy_ui","audio","bevy_gltf"]` explicitly.
+- **Cargo Features (0.19):** `bevy` features are now granular — `audio` is **not** implied by `2d`/`3d`/`ui`, `ui` not implied by `2d`/`3d`, `bevy_picking` no longer pulls `bevy_input_focus`, `bevy_window`/`custom_cursor` moved to alternate collections, `bevy_material` split from `bevy_pbr`, `bevy_light` owns `Skybox`/`Atmosphere`. Headless `spacegame_sim` must be `bevy = { version = "0.19", default-features = false, features = ["bevy_asset","bevy_state","bevy_scene"] }` (add `multi-threaded` as needed); client/binary adds `["2d","3d","bevy_pbr","bevy_ui","audio","bevy_gltf","bevy_feathers","png"]` explicitly. `bevy_brp_extras` is `0.22.3` ↔ Bevy `0.19` per upstream matrix; only `spacegame` binary enables it via `brp` feature.
 
 ### Simulation Conventions (EVE × X4)
 
@@ -162,6 +168,9 @@ cargo build -p {crate-name}
 
 # Build entire workspace
 cargo build --workspace
+
+# Verify dev-only BRP extras compile (no separate binary)
+cargo check --features brp
 ```
 
 Workspace dependencies (source of truth in root `Cargo.toml` `[workspace.dependencies]`):
@@ -169,6 +178,7 @@ Workspace dependencies (source of truth in root `Cargo.toml` `[workspace.depende
 ```toml
 [workspace.dependencies]
 bevy = { version = "0.19", default-features = false, features = ["bevy_asset", "bevy_state", "bevy_scene"] }
+bevy_brp_extras = "0.22.3"  # pinned to Bevy 0.19 row; only `spacegame` binary enables via `brp` feature
 thiserror = "2"
 anyhow = "1"
 ron = "0.8"
@@ -176,16 +186,47 @@ postcard = { version = "1", features = ["use-std"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
-Binary/client adds `bevy` with `features = ["2d","3d","bevy_pbr","bevy_ui","audio","bevy_gltf","bevy_feathers"]` plus `bevy_persist` specifics.
+Binary/client adds `bevy` with `features = ["2d","3d","bevy_pbr","bevy_ui","audio","bevy_gltf","bevy_feathers","png"]` plus `bevy_brp_extras` via `[features] brp = ["bevy_brp_extras","bevy/png"]`. No other crate enables `png` or `brp` — this keeps `spacegame_sim` headless (`default-features = false`) and avoids paying `bevy_render` cost in sim tests.
+
+Troubleshooting (dev-only): `cargo run --features brp` adds `BrpExtrasPlugin::default()` (listens `127.0.0.1:15702`, env `BRP_EXTRAS_PORT` overrides). `brp_list_agent_tools` / `brp_execute` (`brp_extras/screenshot`, `click_mouse`, `send_keys`) work only after this plugin is added.
 
 ## Testing
 
-When testing Bevy applications, you will typically need to construct an App, add minimal plugins (like MinimalPlugins), and call `app.update()` to drive the ECS scheduler.
+`cargo nextest` is the sole runner — `cargo test` is forbidden (docs and CI use `nextest` exclusively to avoid runner-specific isolation drift). Each `crates/*/tests/*.rs` file runs as a separate binary in parallel, so adding tests doesn't linearly slow the suite.
 
 ```bash
-# Run tests for a specific crate
-cargo test -p {crate-name} --all-features
+# Headless sim (determinism, order-queue, perf budgets) — P0, no window
+cargo nextest run -p spacegame_sim --all-features
+
+# Full workspace (sim + data + render + ui)
+cargo nextest run --workspace --all-features
+
+# CI profile (retries, junit, 60s slow-timeout) — canonical CI command
+cargo nextest run --profile ci --workspace --all-features
 ```
+
+Profiles live in `.config/nextest.toml`:
+
+```toml
+[profile.default]
+retries = 1
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci]
+retries = 2
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci.junit]
+path = "junit.xml"
+```
+
+### Headless harness & fixtures
+
+- **Location:** `crates/spacegame_sim/tests/common/mod.rs` — shared helpers extracted from the mining loop: `headless_app()`, `wyrand_next`, `wyrand_vec3`, `world_hash`, `tick_n`, `miner_template()`/`miner_stats()`, `seeded_asteroid_positions`, `spawn_seeded_asteroids`.
+- **Seam:** `headless_app()` = `App::new().add_plugins((MinimalPlugins, SimPlugin)) + TimeUpdateStrategy::ManualDuration(Time::<Fixed>::default().timestep())`. No `bevy_render`/`bevy_pbr`, no window/GPU, gated by `in_state(GameState::Simulating)`. `SimPlugin` wires `FixedUpdate` `EconomySet→AiSet→MovementSet→MiningSet→CombatSet` via `StatesPlugin` idempotent install.
+- **Per-feature files:** One `crates/spacegame_sim/tests/*.rs` file per feature (determinism, economy invariants, order-queue, etc.) — not one monolithic file.
+- **BRP/MCP forbid:** Integration tests never import `bevy_brp_extras`, `RemoteHttpPlugin`, or `brp_extras`. Tests inspect `World` directly (`app.world().get::<T>()`, `query::<(&Transform,&Asteroid)>`). `brp_extras` mouse/keyboard/screenshot remain MCP troubleshooting-only. CI fails on `grep -R "BrpExtrasPlugin\|RemoteHttpPlugin\|brp_extras\|bevy_brp" crates/*/tests`.
+- **Full-app P1 (future):** `App::new().add_plugins((MinimalPlugins, SimPlugin, spacegame_render, spacegame_ui))` headless, synthetic `app.world_mut().trigger(...)` / observer `On<Pointer<Click>>` inside `bsn!` to verify `Camera3d` order 0 / `Camera2d` order 1 `ZIndex(100)` / `Pickable::IGNORE` / `HoverMap` occlusion — no `RemoteHttpPlugin`/`RemotePlugin`, no real window/GPU.
 
 ### Test Generation
 
@@ -196,9 +237,10 @@ cargo test -p {crate-name} --all-features
 
 ### Simulation Testing (add for this project)
 
-- Determinism: seeded `WyRand` run for 10k `FixedUpdate` ticks produces identical hashes.
+- Determinism: seeded `WyRand` run for 10k `FixedUpdate` ticks produces identical `world_hash` (paired `(Transform, Asteroid)` + ship transforms, sorted tuples) for a given seed — SETA scaling stays deterministic.
 - Invariants: closed-economy `total_credits + ware_value` constant, no negative wares.
-- Headless: `cargo test -p spacegame_sim --all-features` must pass without a window; `cargo bench -p spacegame_sim` budgets market tick < 2ms at 1k stations.
+- Headless: `cargo nextest run -p spacegame_sim --all-features` must pass without a window; `cargo bench -p spacegame_sim` budgets market tick < 2ms at 1k stations (background, not PR-gating).
+- Perf budgets are per-test asserts (`<2ms market tick @1k stations`, `<0.1ms headless tick 1 ship+2 Asteroids`) — 2× regressions fail before `nextest` 60s slow-timeout hang backstop.
 
 ## Git Workflow
 
@@ -236,5 +278,7 @@ cargo clippy -p {crate-name}
 # Auto-fix some issues
 cargo clippy --fix -p {crate-name}
 ```
+
+CI gate is `cargo nextest run --profile ci --workspace --all-features` plus the BRP grep gate (`grep -R "BrpExtrasPlugin\|RemoteHttpPlugin\|brp_extras\|bevy_brp" crates/*/tests` must be empty) and `cargo fmt --check` / `cargo clippy --workspace --all-features`. `cargo test` is not used.
 
 Migration reference: `https://bevy.org/learn/migration-guides/0-18-to-0-19/` (note `0-18` hyphen, not `0.18`).

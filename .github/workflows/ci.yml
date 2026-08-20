@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Install cargo-binstall (for nextest fallback)
+        run: cargo install cargo-binstall --locked || true
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy (workspace)
+        run: cargo clippy --workspace --all-features -- -D warnings
+
+      - name: Grep gate — forbid BRP/MCP in integration tests
+        run: |
+          if grep -R "BrpExtrasPlugin\|RemoteHttpPlugin\|brp_extras\|bevy_brp" crates/*/tests 2>/dev/null; then
+            echo "BRP/MCP usage forbidden in crates/*/tests — see AGENTS.md Testing section"
+            exit 1
+          fi
+          echo "grep gate passed — no BRP/MCP in tests"
+
+      - name: Nextest (CI profile)
+        run: cargo nextest run --profile ci --workspace --all-features
+
+      - name: Verify brp feature compiles
+        run: cargo check --features brp

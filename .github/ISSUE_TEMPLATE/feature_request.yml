@@ -62,7 +62,7 @@ body:
       placeholder: |
         - [ ] Queued loop executes deterministically with seeded WyRand over 10k ticks
         - [ ] Queue persists via postcard save and round-trips
-        - [ ] cargo test -p spacegame_sim --all-features passes without window
+        - [ ] cargo nextest run -p spacegame_sim --all-features passes without window
     validations:
       required: false
 

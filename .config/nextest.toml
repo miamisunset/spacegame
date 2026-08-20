@@ -1,0 +1,15 @@
+# nextest profiles — single source for timeout/retry behaviour.
+# `cargo nextest run` (default) and `cargo nextest run --profile ci` both
+# use a 60s slow-timeout as hang backstop; per-test budget asserts remain
+# the 2×-regression gate.
+
+[profile.default]
+retries = 1
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci]
+retries = 2
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci.junit]
+path = "junit.xml"

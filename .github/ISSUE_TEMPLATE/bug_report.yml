@@ -44,7 +44,7 @@ body:
       label: Steps to reproduce
       description: Minimal repro. Triage will try to reproduce before grilling.
       placeholder: |
-        1. cargo test -p spacegame_sim market_negative -- --nocapture
+        1. cargo nextest run -p spacegame_sim market_negative
         2. Seed WyRand 42, run 10k FixedUpdate ticks
         3. Assert inventory >= 0 fails
       value: |
