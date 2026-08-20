@@ -17,7 +17,7 @@ mod plugin;
 mod sets;
 mod state;
 
-pub use movement::{ARRIVAL_DISTANCE, ARRIVAL_RADIUS, ShipStats, movement_system};
+pub use movement::{ARRIVAL_DISTANCE, ARRIVAL_RADIUS, ShipStats};
 pub use order::{OrbitTarget, Order, OrderQueue};
 pub use plugin::SimPlugin;
 pub use sets::{AiSet, CombatSet, EconomySet, MiningSet, MovementSet};

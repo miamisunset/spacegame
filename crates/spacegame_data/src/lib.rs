@@ -349,6 +349,14 @@ fn validate_ship(ship: &ShipTemplate) -> Result<(), DataError> {
     if ship.mining_range < ship.orbit_range {
         return Err(validation_err("mining_range", "must be >= orbit_range"));
     }
+    // Steering invariant arrival < orbit; ARRIVAL_RADIUS is 50.0 in spacegame_sim::movement.
+    // Keep in sync with `ARRIVAL_RADIUS`; validated here so bad RON fails at parse, not only at ShipStats::new (assert).
+    if ship.orbit_range.get() <= 50.0 {
+        return Err(validation_err(
+            "orbit_range",
+            "must be > arrival radius (50.0)",
+        ));
+    }
     Ok(())
 }
 

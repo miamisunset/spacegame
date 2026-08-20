@@ -14,8 +14,9 @@ use crate::order::{OrbitTarget, Order, OrderQueue};
 
 /// Helper: deterministic seek/arrive step toward `target_pos` from `current`.
 ///
-/// Returns `(new_position, arrived)` where `arrived` is true when
-/// `distance <= arrival` before the step. Scale is `min(dist/arrival,1)*speed`.
+/// Returns new position; caller handles arrival/pop (`dist <= arrival`).
+/// Scale is `min(dist/arrival,1)*speed`. Returns `current` when
+/// `dist <= f32::EPSILON` to avoid normalize of zero length.
 #[inline]
 fn seek_arrive_step(current: Vec3, target_pos: Vec3, arrival: f32, speed: f32, dt: f32) -> Vec3 {
     let dir = target_pos - current;
@@ -74,7 +75,7 @@ impl ShipStats {
     /// Create validated stats.
     ///
     /// # Panics
-    /// Panics in debug if `arrival_radius >= orbit_range` or `orbit_range > mining_range`
+    /// Panics if `arrival_radius >= orbit_range` or `orbit_range > mining_range`
     /// — steering requires `arrival < orbit <= mining`.
     #[must_use]
     pub fn new(
@@ -83,13 +84,13 @@ impl ShipStats {
         mining_range: Distance,
         orbit_range: Distance,
     ) -> Self {
-        debug_assert!(
+        assert!(
             arrival_radius.get() < orbit_range.get(),
             "arrival_radius {} must be < orbit_range {}",
             arrival_radius.get(),
             orbit_range.get()
         );
-        debug_assert!(
+        assert!(
             orbit_range.get() <= mining_range.get(),
             "orbit_range {} must be <= mining_range {}",
             orbit_range.get(),
@@ -116,7 +117,7 @@ impl ShipStats {
             mining_range: template.mining_range,
             orbit_range: template.orbit_range,
         };
-        debug_assert!(
+        assert!(
             stats.arrival_radius.get() < stats.orbit_range.get(),
             "ARRIVAL_RADIUS {} must be < orbit_range {} from RON",
             stats.arrival_radius.get(),
@@ -151,7 +152,7 @@ impl From<ShipTemplate> for ShipStats {
 /// are `Component OrderQueue` FIFO, popped only on deterministic arrival or
 /// missing target.
 #[allow(clippy::excessive_nesting)]
-pub fn movement_system(
+pub(crate) fn movement_system(
     time: Res<Time<Fixed>>,
     mut ships: Query<(&mut Transform, &mut OrderQueue, &ShipStats)>,
     // Slice-1 targets are asteroids (no ShipStats). Ship-to-ship Approach is
@@ -176,7 +177,7 @@ pub fn movement_system(
                 let dir = target_pos - tf.translation;
                 let dist = dir.length();
                 // Already arrived — pop FIFO and hold.
-                if dist <= arrival || dist < 1e-4 {
+                if dist <= arrival {
                     queue.pop_front();
                     continue;
                 }
@@ -190,7 +191,7 @@ pub fn movement_system(
                 };
                 let target_pos = target_tf.translation;
                 let dist = (target_pos - tf.translation).length();
-                if dist <= arrival || dist < 1e-4 {
+                if dist <= arrival {
                     queue.pop_front();
                     continue;
                 }
@@ -247,16 +248,10 @@ pub fn movement_system(
                 let dist = dir.length();
                 if dist > mining_range {
                     // Approach until within mining_range, then hold. No arrive scaling — stop at mining_range.
-                    if dist < 1e-4 {
-                        continue;
-                    }
+                    // `step_len (~speed*dt)` is << `mining_range`, so no overshoot teleport needed;
+                    // next tick holds once `dist <= mining_range`.
                     let step_len = speed * dt;
-                    // Don't overshoot beyond mining_range boundary: clamp step if it would cross inside in one tick? Simple move; next tick will hold.
-                    if step_len >= dist {
-                        tf.translation = target_pos;
-                    } else {
-                        tf.translation += dir / dist * step_len;
-                    }
+                    tf.translation += dir / dist * step_len;
                 } else {
                     // Within mining_range — hold position (zero velocity).
                 }
