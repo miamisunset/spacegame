@@ -82,15 +82,14 @@ fn on_ground_click(
 
 /// Show context menu on right-click of an asteroid.
 ///
-/// Checks `ButtonInput<MouseButton>` since `PointerButton` is not
-/// directly importable from the `bevy::picking::events` path.
+/// Uses `click.button` directly — `Pointer<Click>` fires on button release,
+/// so `ButtonInput::pressed()` is already false at that point.
 fn on_asteroid_right_click(
     click: On<Pointer<Click>>,
     mut state: ResMut<ContextMenuState>,
-    mouse_button: Res<ButtonInput<MouseButton>>,
     asteroids: Query<(), With<Asteroid>>,
 ) {
-    if mouse_button.pressed(MouseButton::Right) && asteroids.contains(click.entity) {
+    if click.button == PointerButton::Secondary && asteroids.contains(click.entity) {
         let pos = Vec2::new(
             click.pointer_location.position.x,
             click.pointer_location.position.y,
@@ -101,11 +100,10 @@ fn on_asteroid_right_click(
 
 /// Hide context menu on any left-click (primary button).
 fn on_left_click_hide_menu(
-    _click: On<Pointer<Click>>,
+    click: On<Pointer<Click>>,
     mut state: ResMut<ContextMenuState>,
-    mouse_button: Res<ButtonInput<MouseButton>>,
 ) {
-    if mouse_button.pressed(MouseButton::Left) {
+    if click.button == PointerButton::Primary {
         *state = ContextMenuState::Hidden;
     }
 }
