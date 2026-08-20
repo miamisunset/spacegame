@@ -188,6 +188,8 @@ fn strategic_camera_system(
     mut query: Query<(&mut Transform, &mut StrategicCamera)>,
     hover: Res<HoverMap>,
     ctx: Res<ContextState>,
+    asteroids: Query<Entity, With<Asteroid>>,
+    ships: Query<Entity, With<ShipStats>>,
     window_q: Query<Entity, With<Window>>,
 ) {
     let Ok((mut tf, mut cam)) = query.single_mut() else {
@@ -240,17 +242,20 @@ fn strategic_camera_system(
     }
 
     // EVE-style gating: orbit only on empty space and when menu not visible.
-    let hovering_pickable = hover
-        .get(&PointerId::Mouse)
-        .and_then(|map| {
-            let window_ent = window_q.single().ok();
-            map.iter()
-                .find(|(e, _)| Some(**e) != window_ent)
-                .map(|(e, _)| e)
-        })
-        .is_some();
-    let should_orbit =
-        mouse_button.pressed(MouseButton::Right) && !ctx.visible && !hovering_pickable;
+    // First non-Window hover determines blocking: world target -> menu (no orbit),
+    // UI panel -> block (no orbit), empty/window -> orbit.
+    let hovered_first = hover.get(&PointerId::Mouse).and_then(|map| {
+        let window_ent = window_q.single().ok();
+        map.iter()
+            .find(|(e, _)| Some(**e) != window_ent)
+            .map(|(e, _)| *e)
+    });
+    let is_world_target = hovered_first.is_some_and(|e| asteroids.contains(e) || ships.contains(e));
+    let is_ui_block = hovered_first.is_some_and(|e| !asteroids.contains(e) && !ships.contains(e));
+    let should_orbit = mouse_button.pressed(MouseButton::Right)
+        && !ctx.visible
+        && !is_world_target
+        && !is_ui_block;
 
     if should_orbit {
         for ev in mouse_motion.read() {

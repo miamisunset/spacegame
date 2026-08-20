@@ -2,6 +2,7 @@
 //! Use `bsn!{ Entity { Children [ ... ] } }` with `on(|e: On<Pointer<Click>>| {...})`
 //! No .bsn asset file loader in Bevy 0.19.
 #![allow(clippy::excessive_nesting)]
+use bevy::picking::Pickable;
 use bevy::picking::hover::HoverMap;
 use bevy::picking::pointer::PointerId;
 use bevy::prelude::*;
@@ -69,6 +70,7 @@ fn overlay_scene() -> impl Scene {
             align_items: AlignItems::FlexEnd,
             padding: UiRect::all(px(12)),
         }
+        Pickable::IGNORE
         Children [
             (
                 Node {
@@ -286,21 +288,22 @@ fn handle_right_click_spawn_menu(
         let Some(pos) = cursor else {
             return;
         };
-        // Find hovered pickable (exclude Window fallback). HoverMap is sorted by depth.
-        let hovered = hover.get(&PointerId::Mouse).and_then(|map| {
+        // Find hovered entity — first non-Window hit (UI or world). Root overlay
+        // is Pickable::IGNORE so world picks shine through except where UI
+        // panels (360px top-right) block. This gives EVE-style: UI blocks world.
+        let hovered_first = hover.get(&PointerId::Mouse).and_then(|map| {
             let window_ent = window_entity_q.single().ok();
             map.iter()
                 .find(|(e, _)| Some(**e) != window_ent)
                 .map(|(e, hit)| (*e, hit.clone()))
         });
 
-        // Determine if hovered entity is a valid target (asteroid or ship).
-        let is_target = hovered
+        let is_world_target = hovered_first
             .as_ref()
             .is_some_and(|(e, _)| asteroids.contains(*e) || ships.contains(*e));
 
-        if is_target {
-            let (entity, hit) = hovered.unwrap();
+        if is_world_target {
+            let (entity, hit) = hovered_first.unwrap();
             ctx.target = Some(entity);
             ctx.screen_pos = pos;
             // Prefer picking hit position; fallback to ray-plane y=0.
