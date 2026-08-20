@@ -134,6 +134,7 @@ fn context_menu_scene(screen_pos: Vec2) -> impl Scene {
         }
         BackgroundColor(Color::srgba(0.12, 0.12, 0.16, 0.95))
         Visibility::Hidden
+        ZIndex(100)
         ContextMenu
         Children [
             (context_button("FlyTo Here", OrderKind::FlyTo)),
@@ -298,12 +299,36 @@ fn handle_right_click_spawn_menu(
                 .map(|(e, hit)| (*e, hit.clone()))
         });
 
+        // Debug: log hover state on right-click
+        if let Some(map) = hover.get(&PointerId::Mouse) {
+            let entries: Vec<String> = map
+                .iter()
+                .map(|(e, hit)| {
+                    let kind = if asteroids.contains(*e) {
+                        "Asteroid"
+                    } else if ships.contains(*e) {
+                        "Ship"
+                    } else {
+                        "UI/Other"
+                    };
+                    format!("{e:?}:{kind}:depth={:.1}", hit.depth)
+                })
+                .collect();
+            bevy::log::info!(
+                "RMB at {pos:?} hover_first={hovered_first:?} map=[{}]",
+                entries.join(", ")
+            );
+        } else {
+            bevy::log::info!("RMB at {pos:?} hover=None (empty)");
+        }
+
         let is_world_target = hovered_first
             .as_ref()
             .is_some_and(|(e, _)| asteroids.contains(*e) || ships.contains(*e));
 
         if is_world_target {
             let (entity, hit) = hovered_first.unwrap();
+            bevy::log::info!(" -> opening menu for {entity:?} at screen {pos:?}");
             ctx.target = Some(entity);
             ctx.screen_pos = pos;
             // Prefer picking hit position; fallback to ray-plane y=0.
@@ -314,22 +339,37 @@ fn handle_right_click_spawn_menu(
             for mut node in &mut menu_node {
                 node.left = Val::Px(pos.x);
                 node.top = Val::Px(pos.y);
+                bevy::log::info!("   menu node set to left={} top={}", pos.x, pos.y);
+            }
+            // Immediate visibility — don't rely solely on is_changed sync
+            for mut vis in &mut menu_query {
+                *vis = Visibility::Visible;
+                bevy::log::info!("   menu vis -> Visible");
             }
         } else {
-            // Empty space — close menu if open (let camera orbit handle the drag).
+            // Empty or UI-block — close menu if open (let camera orbit handle the drag).
+            bevy::log::info!(
+                " -> empty/UI hit, closing menu (was visible={})",
+                ctx.visible
+            );
             if ctx.visible {
                 ctx.visible = false;
+                for mut vis in &mut menu_query {
+                    *vis = Visibility::Hidden;
+                }
             }
             // Still compute world_pos for potential FlyTo if menu were open via keyboard,
             // but don't set target.
             ctx.target = None;
             ctx.screen_pos = pos;
             ctx.world_pos = screen_to_world_y0(pos, &camera_q).unwrap_or(Vec3::ZERO);
-            // If we were showing menu, hide will be synced below via is_changed.
-            // If menu not visible, keep it hidden — no new menu on empty.
         }
     } else if mouse_button.just_pressed(MouseButton::Left) && ctx.visible {
+        bevy::log::info!("LMB -> closing menu");
         ctx.visible = false;
+        for mut vis in &mut menu_query {
+            *vis = Visibility::Hidden;
+        }
     }
 
     // Sync visibility only when ContextState changed — fixes per-frame churn.
